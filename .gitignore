@@ -1,0 +1,21 @@
+.anchor
+.DS_Store
+target
+**/*.rs.bk
+node_modules
+test-ledger
+.yarn
+
+# Internal build-tracking / superstack workspace state
+.superstack/
+
+# Local keypairs — never commit
+*-keypair.json
+co-signer-keypair.json
+wallet-*.json
+test-wallet.json
+
+# Env files
+.env
+.env.local
+.env.*.local
