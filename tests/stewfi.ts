@@ -1,8 +1,11 @@
 import * as anchor from "@coral-xyz/anchor";
-import { Program } from "@coral-xyz/anchor";
+import { Program, BN } from "@coral-xyz/anchor";
 import { Stewfi } from "../target/types/stewfi";
 import {
   createMint,
+  getOrCreateAssociatedTokenAccount,
+  mintTo,
+  getAccount,
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import {
@@ -14,61 +17,45 @@ import {
 } from "@solana/web3.js";
 import { assert } from "chai";
 
-describe("stewfi — M1 (foundation: initialize)", () => {
-  // Use whatever provider Anchor.toml points to (localnet by default).
+describe("stewfi", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
   const program = anchor.workspace.Stewfi as Program<Stewfi>;
   const connection = provider.connection;
 
-  // Test-scoped state — fresh for each `anchor test` run.
+  // Shared admin + mint + pool, set up once
   let admin: Keypair;
   let usdcMint: PublicKey;
   let poolConfigPda: PublicKey;
   let poolConfigBump: number;
   let usdcVaultPda: PublicKey;
 
-  before("set up admin + test USDC mint + derive PDAs", async () => {
-    // Generate a fresh admin keypair for this test. NOT the wallet from Anchor.toml —
-    // we want each test run reproducible from zero. The provider wallet pays for some
-    // infra (validator deploy), but our test admin owns the protocol.
+  before("admin + USDC mint + initialize pool", async () => {
     admin = Keypair.generate();
-
-    // Fund the admin with SOL so they can pay rent on the PDAs we're about to create.
-    // On local validator, requestAirdrop is unlimited; on devnet it's rate-limited.
-    const airdropSig = await connection.requestAirdrop(
+    const adminAirdrop = await connection.requestAirdrop(
       admin.publicKey,
-      2 * LAMPORTS_PER_SOL
+      5 * LAMPORTS_PER_SOL
     );
-    await connection.confirmTransaction(airdropSig, "confirmed");
+    await connection.confirmTransaction(adminAirdrop, "confirmed");
 
-    // Create a test USDC mint. 6 decimals to match the real USDC mint format.
-    // Admin is both payer and mint authority — fine for tests.
     usdcMint = await createMint(
       connection,
-      admin, // payer
-      admin.publicKey, // mint authority
-      null, // freeze authority (none)
-      6 // decimals
+      admin,
+      admin.publicKey,
+      null,
+      6
     );
 
-    // Derive PoolConfig PDA. Must match the seeds in lib.rs exactly.
     [poolConfigPda, poolConfigBump] = PublicKey.findProgramAddressSync(
       [Buffer.from("pool_config"), usdcMint.toBuffer()],
       program.programId
     );
-
-    // Derive the USDC vault PDA. Same pattern, different seed.
     [usdcVaultPda] = PublicKey.findProgramAddressSync(
       [Buffer.from("usdc_vault"), usdcMint.toBuffer()],
       program.programId
     );
-  });
 
-  it("initializes the pool", async () => {
-    // Call the on-chain `initialize` instruction. Anchor's `methods` builder reads
-    // the IDL and gives us a type-safe RPC call.
-    const txSig = await program.methods
+    await program.methods
       .initialize()
       .accounts({
         poolConfig: poolConfigPda,
@@ -81,73 +68,310 @@ describe("stewfi — M1 (foundation: initialize)", () => {
       })
       .signers([admin])
       .rpc();
-
-    console.log("    initialize tx:", txSig);
-
-    // Fetch the on-chain PoolConfig back and prove its fields match what we set.
-    const config = await program.account.poolConfig.fetch(poolConfigPda);
-
-    assert.equal(
-      config.admin.toBase58(),
-      admin.publicKey.toBase58(),
-      "admin must match the signer"
-    );
-    assert.equal(
-      config.usdcMint.toBase58(),
-      usdcMint.toBase58(),
-      "usdc_mint must match"
-    );
-    assert.equal(
-      config.usdcVault.toBase58(),
-      usdcVaultPda.toBase58(),
-      "usdc_vault must match the derived PDA"
-    );
-    assert.isFalse(config.paused, "paused must default to false");
-    assert.equal(
-      config.currentRound.toNumber(),
-      0,
-      "current_round must start at 0"
-    );
-    assert.equal(
-      config.bump,
-      poolConfigBump,
-      "stored bump must match the derived bump"
-    );
   });
 
-  it("rejects re-initialization (init constraint enforces single-init)", async () => {
-    // Calling `initialize` again on the same usdc_mint must fail — the `init`
-    // constraint in lib.rs rejects existing accounts. This protects us from
-    // an attacker calling initialize a second time to overwrite the admin.
-    try {
+  // ===========================================================================
+  // M1 — Foundation
+  // ===========================================================================
+
+  describe("M1 — foundation", () => {
+    it("PoolConfig has the expected initial state", async () => {
+      const config = await program.account.poolConfig.fetch(poolConfigPda);
+      assert.equal(config.admin.toBase58(), admin.publicKey.toBase58());
+      assert.equal(config.usdcMint.toBase58(), usdcMint.toBase58());
+      assert.equal(config.usdcVault.toBase58(), usdcVaultPda.toBase58());
+      assert.isFalse(config.paused);
+      assert.equal(config.currentRound.toNumber(), 0);
+      assert.equal(config.bump, poolConfigBump);
+      assert.isAbove(config.usdcVaultBump, 0);
+    });
+
+    it("rejects re-initialization (init constraint)", async () => {
+      try {
+        await program.methods
+          .initialize()
+          .accounts({
+            poolConfig: poolConfigPda,
+            usdcVault: usdcVaultPda,
+            usdcMint: usdcMint,
+            admin: admin.publicKey,
+            systemProgram: SystemProgram.programId,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            rent: SYSVAR_RENT_PUBKEY,
+          })
+          .signers([admin])
+          .rpc();
+        assert.fail("re-init should have failed");
+      } catch (err: any) {
+        const m = err.toString();
+        assert.isTrue(
+          m.includes("already in use") || m.includes("0x0") || m.toLowerCase().includes("custom"),
+          `expected re-init failure, got: ${m}`
+        );
+      }
+    });
+  });
+
+  // ===========================================================================
+  // M2 — Deposit + Withdraw
+  // ===========================================================================
+
+  describe("M2 — deposit + withdraw", () => {
+    let user: Keypair;
+    let userUsdcAta: PublicKey;
+    let userPositionPda: PublicKey;
+
+    const ONE_USDC = 1_000_000;
+    const TEN_USDC = 10 * ONE_USDC;
+    const FIVE_THOUSAND_USDC = 5_000 * ONE_USDC;
+
+    before("create user, fund SOL + USDC, derive PDA", async () => {
+      user = Keypair.generate();
+      const sig = await connection.requestAirdrop(
+        user.publicKey,
+        2 * LAMPORTS_PER_SOL
+      );
+      await connection.confirmTransaction(sig, "confirmed");
+
+      const ata = await getOrCreateAssociatedTokenAccount(
+        connection,
+        admin,
+        usdcMint,
+        user.publicKey
+      );
+      userUsdcAta = ata.address;
+
+      // Mint 10,000 USDC to user (well over the 5K per-wallet cap, so we can test rejection)
+      await mintTo(
+        connection,
+        admin,
+        usdcMint,
+        userUsdcAta,
+        admin,
+        10_000 * ONE_USDC
+      );
+
+      [userPositionPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("user_position"), user.publicKey.toBuffer()],
+        program.programId
+      );
+    });
+
+    it("rejects deposit below MIN_DEPOSIT (5 USDC < 10)", async () => {
+      try {
+        await program.methods
+          .deposit(new BN(5 * ONE_USDC))
+          .accounts({
+            poolConfig: poolConfigPda,
+            userPosition: userPositionPda,
+            usdcVault: usdcVaultPda,
+            userUsdc: userUsdcAta,
+            user: user.publicKey,
+            systemProgram: SystemProgram.programId,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([user])
+          .rpc();
+        assert.fail("expected DepositTooSmall");
+      } catch (err: any) {
+        assert.include(err.toString(), "DepositTooSmall");
+      }
+    });
+
+    it("rejects deposit above MAX_DEPOSIT_PER_WALLET (6,000 USDC > 5,000)", async () => {
+      try {
+        await program.methods
+          .deposit(new BN(6_000 * ONE_USDC))
+          .accounts({
+            poolConfig: poolConfigPda,
+            userPosition: userPositionPda,
+            usdcVault: usdcVaultPda,
+            userUsdc: userUsdcAta,
+            user: user.publicKey,
+            systemProgram: SystemProgram.programId,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([user])
+          .rpc();
+        assert.fail("expected DepositTooLarge");
+      } catch (err: any) {
+        assert.include(err.toString(), "DepositTooLarge");
+      }
+    });
+
+    it("happy-path deposit (100 USDC) creates UserPosition + moves USDC to vault", async () => {
+      const vaultBefore = await getAccount(connection, usdcVaultPda);
+      const userBalanceBefore = await getAccount(connection, userUsdcAta);
+
       await program.methods
-        .initialize()
+        .deposit(new BN(100 * ONE_USDC))
         .accounts({
           poolConfig: poolConfigPda,
+          userPosition: userPositionPda,
           usdcVault: usdcVaultPda,
-          usdcMint: usdcMint,
-          admin: admin.publicKey,
+          userUsdc: userUsdcAta,
+          user: user.publicKey,
           systemProgram: SystemProgram.programId,
           tokenProgram: TOKEN_PROGRAM_ID,
-          rent: SYSVAR_RENT_PUBKEY,
         })
-        .signers([admin])
+        .signers([user])
         .rpc();
 
-      assert.fail("Re-initialization should have thrown");
-    } catch (err: any) {
-      // The error message contains "already in use" when the System Program
-      // rejects re-creating an existing account. Different Anchor versions
-      // surface this slightly differently, so we check the broad shape.
-      const message = err.toString();
-      const looksLikeReinitError =
-        message.includes("already in use") ||
-        message.includes("0x0") ||
-        message.toLowerCase().includes("custom program error");
-      assert.isTrue(
-        looksLikeReinitError,
-        `expected re-init failure, got: ${message}`
+      const position = await program.account.userPosition.fetch(userPositionPda);
+      assert.equal(position.user.toBase58(), user.publicKey.toBase58());
+      assert.equal(position.amount.toNumber(), 100 * ONE_USDC);
+      assert.isAbove(position.firstDepositTs.toNumber(), 0);
+      assert.equal(
+        position.firstDepositTs.toNumber(),
+        position.lastDepositTs.toNumber(),
+        "first deposit should match last on initial deposit"
       );
-    }
+      assert.equal(position.withdrawRequestedAt.toNumber(), 0);
+
+      const vaultAfter = await getAccount(connection, usdcVaultPda);
+      const userBalanceAfter = await getAccount(connection, userUsdcAta);
+      assert.equal(
+        Number(vaultAfter.amount - vaultBefore.amount),
+        100 * ONE_USDC,
+        "vault gained 100 USDC"
+      );
+      assert.equal(
+        Number(userBalanceBefore.amount - userBalanceAfter.amount),
+        100 * ONE_USDC,
+        "user paid 100 USDC"
+      );
+    });
+
+    it("top-up: second deposit (50 USDC) increments amount to 150", async () => {
+      const beforePos = await program.account.userPosition.fetch(userPositionPda);
+      const firstTs = beforePos.firstDepositTs.toNumber();
+
+      // Wait a beat so last_deposit_ts diverges from first_deposit_ts visibly
+      await new Promise((r) => setTimeout(r, 1100));
+
+      await program.methods
+        .deposit(new BN(50 * ONE_USDC))
+        .accounts({
+          poolConfig: poolConfigPda,
+          userPosition: userPositionPda,
+          usdcVault: usdcVaultPda,
+          userUsdc: userUsdcAta,
+          user: user.publicKey,
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([user])
+        .rpc();
+
+      const position = await program.account.userPosition.fetch(userPositionPda);
+      assert.equal(position.amount.toNumber(), 150 * ONE_USDC);
+      assert.equal(
+        position.firstDepositTs.toNumber(),
+        firstTs,
+        "first_deposit_ts is sticky — not updated on top-up"
+      );
+      assert.isAbove(
+        position.lastDepositTs.toNumber(),
+        position.firstDepositTs.toNumber(),
+        "last_deposit_ts updated on top-up"
+      );
+    });
+
+    it("rejects withdraw before request_withdraw was called", async () => {
+      try {
+        await program.methods
+          .withdraw()
+          .accounts({
+            poolConfig: poolConfigPda,
+            userPosition: userPositionPda,
+            usdcVault: usdcVaultPda,
+            userUsdc: userUsdcAta,
+            user: user.publicKey,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([user])
+          .rpc();
+        assert.fail("expected WithdrawNotRequested");
+      } catch (err: any) {
+        assert.include(err.toString(), "WithdrawNotRequested");
+      }
+    });
+
+    it("request_withdraw sets withdraw_requested_at", async () => {
+      await program.methods
+        .requestWithdraw()
+        .accounts({
+          userPosition: userPositionPda,
+          user: user.publicKey,
+        })
+        .signers([user])
+        .rpc();
+
+      const position = await program.account.userPosition.fetch(userPositionPda);
+      assert.isAbove(
+        position.withdrawRequestedAt.toNumber(),
+        0,
+        "request_withdraw should set timestamp"
+      );
+    });
+
+    it("rejects double request_withdraw", async () => {
+      try {
+        await program.methods
+          .requestWithdraw()
+          .accounts({
+            userPosition: userPositionPda,
+            user: user.publicKey,
+          })
+          .signers([user])
+          .rpc();
+        assert.fail("expected WithdrawAlreadyRequested");
+      } catch (err: any) {
+        assert.include(err.toString(), "WithdrawAlreadyRequested");
+      }
+    });
+
+    it("rejects deposit while withdraw is pending", async () => {
+      try {
+        await program.methods
+          .deposit(new BN(20 * ONE_USDC))
+          .accounts({
+            poolConfig: poolConfigPda,
+            userPosition: userPositionPda,
+            usdcVault: usdcVaultPda,
+            userUsdc: userUsdcAta,
+            user: user.publicKey,
+            systemProgram: SystemProgram.programId,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([user])
+          .rpc();
+        assert.fail("expected WithdrawAlreadyRequested");
+      } catch (err: any) {
+        assert.include(err.toString(), "WithdrawAlreadyRequested");
+      }
+    });
+
+    it("rejects withdraw before 24h cooldown elapses", async () => {
+      // We just called request_withdraw a moment ago. WITHDRAW_COOLDOWN = 86400s.
+      // So calling withdraw now must fail with WithdrawCooldownActive.
+      try {
+        await program.methods
+          .withdraw()
+          .accounts({
+            poolConfig: poolConfigPda,
+            userPosition: userPositionPda,
+            usdcVault: usdcVaultPda,
+            userUsdc: userUsdcAta,
+            user: user.publicKey,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([user])
+          .rpc();
+        assert.fail("expected WithdrawCooldownActive");
+      } catch (err: any) {
+        assert.include(err.toString(), "WithdrawCooldownActive");
+      }
+    });
   });
 });
