@@ -15,5 +15,8 @@ url = "https://api.apr.dev"
 cluster = "localnet"
 wallet = "~/.config/solana/stewfi-dev.json"
 
+# Default `anchor test` runs ONLY the local-validator suite (M1/M2).
+# The Kamino E2E (tests/kamino.ts) is surfpool-only — run it with `yarn test:kamino`
+# against a running surfpool fork (it needs the real klend reserves + Scope oracle).
 [scripts]
-test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/stewfi.ts"

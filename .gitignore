@@ -19,3 +19,7 @@ test-wallet.json
 .env
 .env.local
 .env.*.local
+
+# surfpool local workspace + logs
+.surfpool/
+.superstack/surf/
