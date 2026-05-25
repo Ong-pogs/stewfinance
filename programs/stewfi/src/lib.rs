@@ -71,6 +71,18 @@ pub const BPS_DENOMINATOR: u64 = 10_000;
 pub const SWITCHBOARD_ON_DEMAND_PID: Pubkey =
     pubkey!("SBondMDrcV3K4kxZR1HNVT7osZxAHVHgYXL5Ze1oMUv");
 
+// -----------------------------------------------------------------------------
+// M5 — GROWING POT (compound the 20% escrow into Kamino, harvest its yield)
+// -----------------------------------------------------------------------------
+
+/// The pot's OWN klend obligation id (Vanilla tag=0, id=1). The M3 main-pool
+/// obligation is id=0; using id=1 derives a DISTINCT obligation PDA under the
+/// SAME owner (the pool_config PDA), so pot principal and main-pool principal
+/// earn yield in separate, independently-redeemable klend positions. Both reuse
+/// the single per-owner UserMetadata created in M3 (klend allows many
+/// obligations per owner_user_metadata).
+pub const KAMINO_POT_OBLIGATION_ID: u8 = 1;
+
 // =============================================================================
 // Program
 // =============================================================================
@@ -108,6 +120,10 @@ pub mod stewfi {
         config.draw_interval = DRAW_INTERVAL;
         config.next_draw_ts = 0;
         config.draw_accounts_ready = false;
+        // M5 fields start zeroed: no pot obligation, no pot principal yet.
+        config.pot_obligation = Pubkey::default();
+        config.pot_principal_usdc = 0;
+        config.growing_pot_obligation_ready = false;
 
         msg!("StewFi initialized. Admin: {}", config.admin);
         Ok(())
@@ -1359,6 +1375,446 @@ pub mod stewfi {
         msg!("Swept {} USDC ops fees to {}", amount, ctx.accounts.destination.key());
         Ok(())
     }
+
+    // -------------------------------------------------------------------------
+    // M5 — THE GROWING POT
+    //
+    // The weekly draw routes 20% of every prize into growing_pot_vault (M4). M5
+    // puts that escrow to work: it deposits the pot's idle USDC into Kamino Lend
+    // (its OWN obligation, id=1, distinct from the M3 main pool's id=0) so it
+    // earns yield, then — right before each draw — fully redeems the pot
+    // position and SPLITS the proceeds in PLAIN USDC (no exchange-rate math):
+    //   - the recovered PRINCIPAL goes back to growing_pot_vault (re-compounded
+    //     by the next crank — so it is NEVER counted in the prize), and
+    //   - the YIELD stays in usdc_vault, where the EXISTING trigger_draw prize
+    //     formula (prize = usdc_vault − total_principal − pending_winnings)
+    //     sweeps it into that week's prize. total_principal is Σ live
+    //     UserPosition.amount and does NOT include pot funds, so the pot's yield
+    //     correctly shows up as extra prize while the pot's principal (parked in
+    //     growing_pot_vault) does not.
+    //
+    // settle_draw and trigger_draw are UNCHANGED. The pot rides the existing
+    // prize pipeline purely via the usdc_vault balance.
+    //
+    // All pot klend CPIs PDA-sign as pool_config `[b"pool_config", usdc_mint,
+    // &[bump]]` (owner of the pot obligation), exactly like M3. The crank
+    // PREPENDS klend refresh_reserve + refresh_obligation in the same tx (same
+    // ordering rule as M3 deposit/withdraw).
+    // -------------------------------------------------------------------------
+
+    /// Admin-only, one-time. Stand up the pot's OWN Kamino obligation (Vanilla
+    /// tag=0, id=1), owned by the pool_config PDA.
+    ///
+    /// Reuses the EXISTING per-owner UserMetadata created in M3
+    /// (init_kamino_obligation already ran `init_user_metadata` for owner =
+    /// pool_config). klend allows multiple obligations under one
+    /// owner_user_metadata, so this ix calls ONLY `init_obligation` — it must NOT
+    /// re-init user_metadata (re-init would fail). Requires the M3 obligation to
+    /// already exist (so we know UserMetadata is present).
+    pub fn init_growing_pot_obligation(ctx: Context<InitGrowingPotObligation>) -> Result<()> {
+        let pool_config = &ctx.accounts.pool_config;
+
+        require!(
+            ctx.accounts.admin.key() == pool_config.admin,
+            StewfiError::Unauthorized
+        );
+        // The pot obligation must be created only once.
+        require!(
+            !pool_config.growing_pot_obligation_ready,
+            StewfiError::PotObligationAlreadyInit
+        );
+        // The pot reuses the M3 UserMetadata, which only exists once the M3
+        // obligation has been initialized.
+        require!(
+            pool_config.kamino_obligation != Pubkey::default(),
+            StewfiError::KaminoObligationNotInit
+        );
+
+        // pool_config PDA signs as the (pot) obligation owner.
+        let mint_key = pool_config.usdc_mint;
+        let bump = pool_config.bump;
+        let pool_config_seeds: &[&[u8]] = &[b"pool_config", mint_key.as_ref(), &[bump]];
+        let signer_seeds: &[&[&[u8]]] = &[pool_config_seeds];
+
+        // ONLY init_obligation (NOT init_user_metadata) — UserMetadata already
+        // exists from M3. tag=0 (Vanilla), id=1 (pot) → a fresh, distinct
+        // obligation PDA under the same owner.
+        let io = klend_accounts::InitObligation {
+            obligation_owner: ctx.accounts.pool_config.to_account_info(),
+            fee_payer: ctx.accounts.admin.to_account_info(),
+            obligation: ctx.accounts.obligation.to_account_info(),
+            lending_market: ctx.accounts.lending_market.to_account_info(),
+            // Vanilla obligation: both seed accounts are the default pubkey.
+            seed1_account: ctx.accounts.seed1_account.to_account_info(),
+            seed2_account: ctx.accounts.seed2_account.to_account_info(),
+            owner_user_metadata: ctx.accounts.user_metadata.to_account_info(),
+            rent: ctx.accounts.rent.to_account_info(),
+            system_program: ctx.accounts.system_program.to_account_info(),
+        };
+        let cpi_io = CpiContext::new_with_signer(
+            ctx.accounts.klend_program.to_account_info(),
+            io,
+            signer_seeds,
+        );
+        kamino_lend::cpi::init_obligation(
+            cpi_io,
+            kamino_lend::typedefs::InitObligationArgs {
+                tag: KAMINO_OBLIGATION_TAG,
+                id: KAMINO_POT_OBLIGATION_ID,
+            },
+        )?;
+
+        let pool_config = &mut ctx.accounts.pool_config;
+        pool_config.pot_obligation = ctx.accounts.obligation.key();
+        pool_config.growing_pot_obligation_ready = true;
+
+        msg!(
+            "Growing-pot obligation initialized: {}",
+            pool_config.pot_obligation
+        );
+        Ok(())
+    }
+
+    /// Admin-only, one-time. Create the POT obligation's farm-user-state for the
+    /// USDC reserve's collateral farm (klend `init_obligation_farms_for_reserve`).
+    ///
+    /// Mirrors init_kamino_farm exactly, but for the pot obligation. Required
+    /// because the mainnet USDC reserve has a NON-default collateral farm, so the
+    /// pot's deposit/withdraw `_v2` CPIs need a populated obligation_farm_user_state
+    /// (else klend returns `FarmAccountsMissing`). For a farmless reserve this is
+    /// unnecessary — callers can skip it and pass klend-program placeholders.
+    pub fn init_growing_pot_farm(ctx: Context<InitGrowingPotFarm>) -> Result<()> {
+        let pool_config = &ctx.accounts.pool_config;
+
+        require!(
+            ctx.accounts.admin.key() == pool_config.admin,
+            StewfiError::Unauthorized
+        );
+        require!(
+            pool_config.growing_pot_obligation_ready,
+            StewfiError::PotObligationNotInit
+        );
+        require!(
+            ctx.accounts.obligation.key() == pool_config.pot_obligation,
+            StewfiError::WrongPotObligation
+        );
+
+        // pool_config PDA signs as the (pot) obligation owner.
+        let mint_key = pool_config.usdc_mint;
+        let bump = pool_config.bump;
+        let pool_config_seeds: &[&[u8]] = &[b"pool_config", mint_key.as_ref(), &[bump]];
+        let signer_seeds: &[&[&[u8]]] = &[pool_config_seeds];
+
+        let ix = klend_accounts::InitObligationFarmsForReserve {
+            payer: ctx.accounts.admin.to_account_info(),
+            owner: ctx.accounts.pool_config.to_account_info(),
+            obligation: ctx.accounts.obligation.to_account_info(),
+            lending_market_authority: ctx.accounts.lending_market_authority.to_account_info(),
+            reserve: ctx.accounts.reserve.to_account_info(),
+            reserve_farm_state: ctx.accounts.reserve_farm_state.to_account_info(),
+            obligation_farm: ctx.accounts.obligation_farm_user_state.to_account_info(),
+            lending_market: ctx.accounts.lending_market.to_account_info(),
+            farms_program: ctx.accounts.farms_program.to_account_info(),
+            rent: ctx.accounts.rent.to_account_info(),
+            system_program: ctx.accounts.system_program.to_account_info(),
+        };
+        let cpi = CpiContext::new_with_signer(
+            ctx.accounts.klend_program.to_account_info(),
+            ix,
+            signer_seeds,
+        );
+        kamino_lend::cpi::init_obligation_farms_for_reserve(cpi, KAMINO_FARM_MODE_COLLATERAL)?;
+
+        msg!(
+            "Growing-pot obligation farm initialized for reserve {}",
+            ctx.accounts.reserve.key()
+        );
+        Ok(())
+    }
+
+    /// PERMISSIONLESS crank. Deposit the ENTIRE growing_pot_vault balance into the
+    /// pot's Kamino obligation via klend
+    /// `deposit_reserve_liquidity_and_obligation_collateral_v2` (same CPI as
+    /// deposit_to_kamino, but `user_source_liquidity = growing_pot_vault` and
+    /// obligation = pot_obligation). The pot principal starts earning yield.
+    ///
+    /// Permissionless is safe: funds only move growing_pot_vault → klend (still
+    /// owned by the pot obligation, whose owner is the pool_config PDA). A griefer
+    /// cannot extract value — only deploy idle pot USDC into yield. Blocked during
+    /// a draw so pot accounting can't shift mid-draw.
+    ///
+    /// The crank MUST prepend klend refresh_reserve + refresh_obligation (for the
+    /// POT obligation) in the same tx.
+    pub fn compound_growing_pot(ctx: Context<CompoundGrowingPot>) -> Result<()> {
+        let pool_config = &ctx.accounts.pool_config;
+
+        require!(!pool_config.paused, StewfiError::PoolPaused);
+        require!(!pool_config.draw_in_progress, StewfiError::DrawInProgress);
+        require!(
+            pool_config.growing_pot_obligation_ready,
+            StewfiError::PotObligationNotInit
+        );
+        require!(
+            ctx.accounts.obligation.key() == pool_config.pot_obligation,
+            StewfiError::WrongPotObligation
+        );
+
+        // Deposit the whole pot vault.
+        let amount = ctx.accounts.growing_pot_vault.amount;
+        require!(amount > 0, StewfiError::InvalidAmount);
+
+        // pool_config PDA signs as the (pot) obligation owner.
+        let mint_key = pool_config.usdc_mint;
+        let bump = pool_config.bump;
+        let pool_config_seeds: &[&[u8]] = &[b"pool_config", mint_key.as_ref(), &[bump]];
+        let signer_seeds: &[&[&[u8]]] = &[pool_config_seeds];
+
+        let deposit_accounts =
+            klend_accounts::DepositReserveLiquidityAndObligationCollateralV2DepositAccounts {
+                owner: ctx.accounts.pool_config.to_account_info(),
+                obligation: ctx.accounts.obligation.to_account_info(),
+                lending_market: ctx.accounts.lending_market.to_account_info(),
+                lending_market_authority: ctx
+                    .accounts
+                    .lending_market_authority
+                    .to_account_info(),
+                reserve: ctx.accounts.reserve.to_account_info(),
+                reserve_liquidity_mint: ctx.accounts.reserve_liquidity_mint.to_account_info(),
+                reserve_liquidity_supply: ctx
+                    .accounts
+                    .reserve_liquidity_supply
+                    .to_account_info(),
+                reserve_collateral_mint: ctx.accounts.reserve_collateral_mint.to_account_info(),
+                reserve_destination_deposit_collateral: ctx
+                    .accounts
+                    .reserve_destination_deposit_collateral
+                    .to_account_info(),
+                // POT vault is the liquidity source (NOT usdc_vault).
+                user_source_liquidity: ctx.accounts.growing_pot_vault.to_account_info(),
+                // Optional: not used by the combined ix → pass klend program (= None).
+                placeholder_user_destination_collateral: ctx
+                    .accounts
+                    .klend_program
+                    .to_account_info(),
+                collateral_token_program: ctx
+                    .accounts
+                    .collateral_token_program
+                    .to_account_info(),
+                liquidity_token_program: ctx.accounts.liquidity_token_program.to_account_info(),
+                instruction_sysvar_account: ctx
+                    .accounts
+                    .instruction_sysvar_account
+                    .to_account_info(),
+            };
+
+        let farms_accounts =
+            klend_accounts::DepositReserveLiquidityAndObligationCollateralV2FarmsAccounts {
+                obligation_farm_user_state: ctx
+                    .accounts
+                    .obligation_farm_user_state
+                    .to_account_info(),
+                reserve_farm_state: ctx.accounts.reserve_farm_state.to_account_info(),
+            };
+
+        let cpi_accounts = klend_accounts::DepositReserveLiquidityAndObligationCollateralV2 {
+            DepositReserveLiquidityAndObligationCollateralV2deposit_accounts: deposit_accounts,
+            DepositReserveLiquidityAndObligationCollateralV2farms_accounts: farms_accounts,
+            farms_program: ctx.accounts.farms_program.to_account_info(),
+        };
+
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.klend_program.to_account_info(),
+            cpi_accounts,
+            signer_seeds,
+        );
+        kamino_lend::cpi::deposit_reserve_liquidity_and_obligation_collateral_v2(cpi_ctx, amount)?;
+
+        // Track the EXACT pot principal now deployed (checked — this gates the
+        // "principal never paid as prize" promise).
+        let pool_config = &mut ctx.accounts.pool_config;
+        pool_config.pot_principal_usdc = pool_config
+            .pot_principal_usdc
+            .checked_add(amount)
+            .ok_or(StewfiError::Overflow)?;
+
+        msg!("Compounded {} USDC of growing-pot into Kamino", amount);
+        Ok(())
+    }
+
+    /// PERMISSIONLESS crank. Run BEFORE trigger_draw each week. Fully redeems the
+    /// pot's Kamino position into usdc_vault (klend
+    /// `withdraw_obligation_collateral_and_redeem_reserve_collateral_v2`, same CPI
+    /// as withdraw_from_kamino), then splits the proceeds IN PLAIN USDC (no
+    /// exchange-rate math anywhere):
+    ///   principal_return = min(total_redeemed, pot_principal_usdc)  -> back to
+    ///                      growing_pot_vault (so it is NOT in the prize; the next
+    ///                      compound re-invests it)
+    ///   yield_amount     = total_redeemed - principal_return        -> STAYS in
+    ///                      usdc_vault → captured by trigger_draw's existing
+    ///                      prize formula.
+    ///
+    /// `full_collateral_amount` is the pot obligation's ENTIRE current cToken
+    /// balance (read off-chain via readObligationCollateral). cToken units, NOT
+    /// USDC. If the pot has 0 cTokens (e.g. the very first draw) the crank should
+    /// skip calling this entirely; defensively, if total_redeemed comes back 0 we
+    /// return NoPotYield. A FLAT week (redeemed == principal → yield 0) is allowed
+    /// and is NOT an error.
+    ///
+    /// Permissionless is safe: USDC only flows klend → usdc_vault and
+    /// usdc_vault → growing_pot_vault, both PDA-owned. A griefer can only move
+    /// pot funds among the pool's own vaults, never out. Blocked during a draw.
+    ///
+    /// The crank MUST prepend klend refresh_reserve + refresh_obligation (for the
+    /// POT obligation) in the same tx.
+    pub fn harvest_growing_pot_yield(
+        ctx: Context<HarvestGrowingPotYield>,
+        full_collateral_amount: u64,
+    ) -> Result<()> {
+        let pool_config = &ctx.accounts.pool_config;
+
+        require!(!pool_config.paused, StewfiError::PoolPaused);
+        require!(!pool_config.draw_in_progress, StewfiError::DrawInProgress);
+        require!(
+            pool_config.growing_pot_obligation_ready,
+            StewfiError::PotObligationNotInit
+        );
+        require!(
+            ctx.accounts.obligation.key() == pool_config.pot_obligation,
+            StewfiError::WrongPotObligation
+        );
+        require!(full_collateral_amount > 0, StewfiError::InvalidAmount);
+
+        // pool_config PDA signs as the (pot) obligation owner.
+        let mint_key = pool_config.usdc_mint;
+        let bump = pool_config.bump;
+        let pool_config_seeds: &[&[u8]] = &[b"pool_config", mint_key.as_ref(), &[bump]];
+        let signer_seeds: &[&[&[u8]]] = &[pool_config_seeds];
+
+        // Measure the USDC the redeem adds to usdc_vault.
+        let vault_before = ctx.accounts.usdc_vault.amount;
+
+        let withdraw_accounts =
+            klend_accounts::WithdrawObligationCollateralAndRedeemReserveCollateralV2WithdrawAccounts {
+                owner: ctx.accounts.pool_config.to_account_info(),
+                obligation: ctx.accounts.obligation.to_account_info(),
+                lending_market: ctx.accounts.lending_market.to_account_info(),
+                lending_market_authority: ctx
+                    .accounts
+                    .lending_market_authority
+                    .to_account_info(),
+                withdraw_reserve: ctx.accounts.reserve.to_account_info(),
+                reserve_liquidity_mint: ctx.accounts.reserve_liquidity_mint.to_account_info(),
+                reserve_source_collateral: ctx
+                    .accounts
+                    .reserve_source_collateral
+                    .to_account_info(),
+                reserve_collateral_mint: ctx.accounts.reserve_collateral_mint.to_account_info(),
+                reserve_liquidity_supply: ctx
+                    .accounts
+                    .reserve_liquidity_supply
+                    .to_account_info(),
+                // Redeemed USDC lands in usdc_vault (so the prize formula sees it).
+                user_destination_liquidity: ctx.accounts.usdc_vault.to_account_info(),
+                // Optional: not used by the combined ix → pass klend program (= None).
+                placeholder_user_destination_collateral: ctx
+                    .accounts
+                    .klend_program
+                    .to_account_info(),
+                collateral_token_program: ctx
+                    .accounts
+                    .collateral_token_program
+                    .to_account_info(),
+                liquidity_token_program: ctx.accounts.liquidity_token_program.to_account_info(),
+                instruction_sysvar_account: ctx
+                    .accounts
+                    .instruction_sysvar_account
+                    .to_account_info(),
+            };
+
+        let farms_accounts =
+            klend_accounts::WithdrawObligationCollateralAndRedeemReserveCollateralV2FarmsAccounts {
+                obligation_farm_user_state: ctx
+                    .accounts
+                    .obligation_farm_user_state
+                    .to_account_info(),
+                reserve_farm_state: ctx.accounts.reserve_farm_state.to_account_info(),
+            };
+
+        let cpi_accounts =
+            klend_accounts::WithdrawObligationCollateralAndRedeemReserveCollateralV2 {
+                WithdrawObligationCollateralAndRedeemReserveCollateralV2withdraw_accounts:
+                    withdraw_accounts,
+                WithdrawObligationCollateralAndRedeemReserveCollateralV2farms_accounts:
+                    farms_accounts,
+                farms_program: ctx.accounts.farms_program.to_account_info(),
+            };
+
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.klend_program.to_account_info(),
+            cpi_accounts,
+            signer_seeds,
+        );
+        kamino_lend::cpi::withdraw_obligation_collateral_and_redeem_reserve_collateral_v2(
+            cpi_ctx,
+            full_collateral_amount,
+        )?;
+
+        // How much USDC the redeem actually produced.
+        ctx.accounts.usdc_vault.reload()?;
+        let total_redeemed = ctx
+            .accounts
+            .usdc_vault
+            .amount
+            .checked_sub(vault_before)
+            .ok_or(StewfiError::Overflow)?;
+        // Empty pot (no position) → nothing to harvest. (A flat week with a real
+        // position returns >= principal > 0, so it does NOT hit this.)
+        require!(total_redeemed > 0, StewfiError::NoPotYield);
+
+        // SPLIT IN PLAIN USDC — no exchange-rate math:
+        //   principal_return = min(redeemed, tracked principal)
+        //   yield_amount     = redeemed - principal_return
+        // If a Kamino loss made redeemed < principal, principal honestly reduces
+        // to what was recovered (principal_return = total_redeemed, yield = 0).
+        let principal_return = total_redeemed.min(pool_config.pot_principal_usdc);
+        let yield_amount = total_redeemed
+            .checked_sub(principal_return)
+            .ok_or(StewfiError::Overflow)?;
+
+        // Return the principal slice to growing_pot_vault (PDA-signed). This keeps
+        // pot PRINCIPAL out of usdc_vault → it is NOT counted in the prize; the
+        // next compound_growing_pot re-invests it. transfer_from_vault skips the
+        // CPI when amount == 0.
+        transfer_from_vault(
+            &ctx.accounts.token_program,
+            ctx.accounts.usdc_vault.to_account_info(),
+            ctx.accounts.growing_pot_vault.to_account_info(),
+            ctx.accounts.pool_config.to_account_info(),
+            signer_seeds,
+            principal_return,
+        )?;
+
+        // Principal now sits in growing_pot_vault (or was honestly reduced by a
+        // Kamino loss). Reset the tracker — the next compound re-establishes it.
+        let pool_config = &mut ctx.accounts.pool_config;
+        pool_config.pot_principal_usdc = 0;
+
+        // The yield_amount remains in usdc_vault → captured by the EXISTING
+        // trigger_draw prize formula (pot funds are NOT in total_principal).
+        emit!(PotHarvested {
+            total_redeemed,
+            yield_amount,
+            principal_returned: principal_return,
+        });
+
+        msg!(
+            "Harvested pot: redeemed={} yield={} principal_returned={}",
+            total_redeemed,
+            yield_amount,
+            principal_return
+        );
+        Ok(())
+    }
 }
 
 // =============================================================================
@@ -2110,6 +2566,254 @@ pub struct SweepOpsFees<'info> {
     pub token_program: Program<'info, Token>,
 }
 
+// -----------------------------------------------------------------------------
+// M5 — Growing-Pot account contexts
+//
+// These mirror the M3 Kamino contexts precisely (same klend-validated
+// UncheckedAccounts, same PDA-signer pattern). The pot uses its OWN obligation
+// (pot_obligation, id=1) — StewFi pins it via `obligation.key() ==
+// pool_config.pot_obligation` in the handlers. klend enforces the rest.
+// -----------------------------------------------------------------------------
+
+#[derive(Accounts)]
+pub struct InitGrowingPotObligation<'info> {
+    #[account(
+        mut,
+        seeds = [b"pool_config", pool_config.usdc_mint.as_ref()],
+        bump = pool_config.bump,
+    )]
+    pub pool_config: Account<'info, PoolConfig>,
+
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    /// klend UserMetadata PDA `[b"user_meta", pool_config]` — REUSED from M3
+    /// (already created by init_kamino_obligation; this ix does NOT re-init it).
+    /// CHECK: validated by klend `init_obligation` (owner_user_metadata).
+    #[account(mut)]
+    pub user_metadata: UncheckedAccount<'info>,
+
+    /// klend POT obligation PDA (tag=0, id=1) — created by the CPI.
+    /// CHECK: validated + initialized by klend `init_obligation`.
+    #[account(mut)]
+    pub obligation: UncheckedAccount<'info>,
+
+    /// CHECK: the klend lending market; validated by klend.
+    pub lending_market: UncheckedAccount<'info>,
+
+    /// Vanilla obligation seed account #1 — must be the default pubkey.
+    /// CHECK: klend derives the obligation PDA from this; we pin it to default.
+    #[account(address = Pubkey::default())]
+    pub seed1_account: UncheckedAccount<'info>,
+
+    /// Vanilla obligation seed account #2 — must be the default pubkey.
+    /// CHECK: klend derives the obligation PDA from this; we pin it to default.
+    #[account(address = Pubkey::default())]
+    pub seed2_account: UncheckedAccount<'info>,
+
+    pub klend_program: Program<'info, KaminoLending>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+#[derive(Accounts)]
+pub struct InitGrowingPotFarm<'info> {
+    #[account(
+        seeds = [b"pool_config", pool_config.usdc_mint.as_ref()],
+        bump = pool_config.bump,
+    )]
+    pub pool_config: Account<'info, PoolConfig>,
+
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    /// CHECK: the pot obligation; checked == pool_config.pot_obligation.
+    #[account(mut)]
+    pub obligation: UncheckedAccount<'info>,
+
+    /// CHECK: klend market authority PDA; validated by klend.
+    pub lending_market_authority: UncheckedAccount<'info>,
+
+    /// CHECK: the USDC reserve; validated by klend.
+    #[account(mut)]
+    pub reserve: UncheckedAccount<'info>,
+
+    /// CHECK: the reserve's collateral farm state; validated by klend/farms.
+    #[account(mut)]
+    pub reserve_farm_state: UncheckedAccount<'info>,
+
+    /// klend pot-obligation farm-user-state PDA — created by the CPI.
+    /// CHECK: validated + initialized by klend `init_obligation_farms_for_reserve`.
+    #[account(mut)]
+    pub obligation_farm_user_state: UncheckedAccount<'info>,
+
+    /// CHECK: the klend lending market; validated by klend.
+    pub lending_market: UncheckedAccount<'info>,
+
+    /// CHECK: the Kamino Farms program; validated by klend CPI.
+    pub farms_program: UncheckedAccount<'info>,
+
+    pub klend_program: Program<'info, KaminoLending>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+#[derive(Accounts)]
+pub struct CompoundGrowingPot<'info> {
+    #[account(
+        mut,
+        seeds = [b"pool_config", pool_config.usdc_mint.as_ref()],
+        bump = pool_config.bump,
+    )]
+    pub pool_config: Account<'info, PoolConfig>,
+
+    /// Anyone can crank this.
+    pub crank: Signer<'info>,
+
+    /// The pot's USDC vault (PDA-owned) = klend `user_source_liquidity`.
+    #[account(
+        mut,
+        seeds = [b"growing_pot_vault", pool_config.usdc_mint.as_ref()],
+        bump = pool_config.growing_pot_vault_bump,
+    )]
+    pub growing_pot_vault: Account<'info, TokenAccount>,
+
+    /// CHECK: pot obligation; checked == pool_config.pot_obligation.
+    #[account(mut)]
+    pub obligation: UncheckedAccount<'info>,
+
+    /// CHECK: klend lending market; validated by klend.
+    pub lending_market: UncheckedAccount<'info>,
+
+    /// CHECK: klend market authority PDA; validated by klend.
+    pub lending_market_authority: UncheckedAccount<'info>,
+
+    /// CHECK: USDC reserve; validated by klend.
+    #[account(mut)]
+    pub reserve: UncheckedAccount<'info>,
+
+    /// CHECK: reserve liquidity mint (USDC); validated by klend.
+    pub reserve_liquidity_mint: UncheckedAccount<'info>,
+
+    /// CHECK: reserve liquidity supply vault; validated by klend.
+    #[account(mut)]
+    pub reserve_liquidity_supply: UncheckedAccount<'info>,
+
+    /// CHECK: reserve collateral (cToken) mint; validated by klend.
+    #[account(mut)]
+    pub reserve_collateral_mint: UncheckedAccount<'info>,
+
+    /// CHECK: reserve collateral supply vault (deposit dest); validated by klend.
+    #[account(mut)]
+    pub reserve_destination_deposit_collateral: UncheckedAccount<'info>,
+
+    /// CHECK: SPL Token program for collateral side; validated by klend.
+    pub collateral_token_program: UncheckedAccount<'info>,
+
+    /// CHECK: token program for the liquidity (USDC) mint; validated by klend.
+    pub liquidity_token_program: UncheckedAccount<'info>,
+
+    /// CHECK: the Instructions sysvar; validated by klend (address-checked there).
+    pub instruction_sysvar_account: UncheckedAccount<'info>,
+
+    /// CHECK: pot obligation farm user state, OR klend program for None (farmless).
+    #[account(mut)]
+    pub obligation_farm_user_state: UncheckedAccount<'info>,
+
+    /// CHECK: reserve collateral farm state, OR klend program for None (farmless).
+    #[account(mut)]
+    pub reserve_farm_state: UncheckedAccount<'info>,
+
+    /// CHECK: the Kamino Farms program; validated by klend CPI.
+    pub farms_program: UncheckedAccount<'info>,
+
+    pub klend_program: Program<'info, KaminoLending>,
+}
+
+#[derive(Accounts)]
+pub struct HarvestGrowingPotYield<'info> {
+    #[account(
+        mut,
+        seeds = [b"pool_config", pool_config.usdc_mint.as_ref()],
+        bump = pool_config.bump,
+    )]
+    pub pool_config: Box<Account<'info, PoolConfig>>,
+
+    /// Anyone can crank this.
+    pub crank: Signer<'info>,
+
+    /// The pool's USDC vault (PDA-owned) = klend `user_destination_liquidity`.
+    /// Redeemed USDC lands here; the pot-principal slice is then transferred back
+    /// to growing_pot_vault, leaving only the yield for the prize formula.
+    #[account(
+        mut,
+        seeds = [b"usdc_vault", pool_config.usdc_mint.as_ref()],
+        bump = pool_config.usdc_vault_bump,
+    )]
+    pub usdc_vault: Box<Account<'info, TokenAccount>>,
+
+    /// The pot's USDC vault (PDA-owned) — receives the returned principal.
+    #[account(
+        mut,
+        seeds = [b"growing_pot_vault", pool_config.usdc_mint.as_ref()],
+        bump = pool_config.growing_pot_vault_bump,
+    )]
+    pub growing_pot_vault: Box<Account<'info, TokenAccount>>,
+
+    /// CHECK: pot obligation; checked == pool_config.pot_obligation.
+    #[account(mut)]
+    pub obligation: UncheckedAccount<'info>,
+
+    /// CHECK: klend lending market; validated by klend.
+    pub lending_market: UncheckedAccount<'info>,
+
+    /// CHECK: klend market authority PDA; validated by klend.
+    pub lending_market_authority: UncheckedAccount<'info>,
+
+    /// CHECK: USDC reserve; validated by klend.
+    #[account(mut)]
+    pub reserve: UncheckedAccount<'info>,
+
+    /// CHECK: reserve liquidity mint (USDC); validated by klend.
+    pub reserve_liquidity_mint: UncheckedAccount<'info>,
+
+    /// CHECK: reserve collateral supply vault (withdraw source); validated by klend.
+    #[account(mut)]
+    pub reserve_source_collateral: UncheckedAccount<'info>,
+
+    /// CHECK: reserve collateral (cToken) mint; validated by klend.
+    #[account(mut)]
+    pub reserve_collateral_mint: UncheckedAccount<'info>,
+
+    /// CHECK: reserve liquidity supply vault; validated by klend.
+    #[account(mut)]
+    pub reserve_liquidity_supply: UncheckedAccount<'info>,
+
+    /// CHECK: SPL Token program for collateral side; validated by klend.
+    pub collateral_token_program: UncheckedAccount<'info>,
+
+    /// CHECK: token program for the liquidity (USDC) mint; validated by klend.
+    pub liquidity_token_program: UncheckedAccount<'info>,
+
+    /// CHECK: the Instructions sysvar; validated by klend (address-checked there).
+    pub instruction_sysvar_account: UncheckedAccount<'info>,
+
+    /// CHECK: pot obligation farm user state, OR klend program for None (farmless).
+    #[account(mut)]
+    pub obligation_farm_user_state: UncheckedAccount<'info>,
+
+    /// CHECK: reserve collateral farm state, OR klend program for None (farmless).
+    #[account(mut)]
+    pub reserve_farm_state: UncheckedAccount<'info>,
+
+    /// CHECK: the Kamino Farms program; validated by klend CPI.
+    pub farms_program: UncheckedAccount<'info>,
+
+    pub klend_program: Program<'info, KaminoLending>,
+
+    pub token_program: Program<'info, Token>,
+}
+
 // =============================================================================
 // State accounts
 // =============================================================================
@@ -2162,6 +2866,23 @@ pub struct PoolConfig {
     pub growing_pot_vault_bump: u8,
     pub operator_vault_bump: u8,
     pub ops_vault_bump: u8,
+    // ---- M5 (Growing Pot — compound the 20% escrow into Kamino) ----
+    // APPEND-ONLY: these three fields are added at the END of PoolConfig so
+    // every M1-M4 field keeps its exact byte offset (InitSpace re-sizes the
+    // account). Existing deployments would migrate; on a fresh init they are
+    // zeroed in `initialize`.
+    /// The pot's OWN klend obligation (Vanilla tag=0, id=1). Distinct from the
+    /// M3 main-pool obligation (kamino_obligation, id=0). Pubkey::default()
+    /// until init_growing_pot_obligation runs.
+    pub pot_obligation: Pubkey,
+    /// EXACT USDC principal currently attributed to the pot position. Increased
+    /// by compound_growing_pot (by the precise amount deposited) and reset to 0
+    /// by harvest_growing_pot_yield (which returns the recovered principal to
+    /// growing_pot_vault). Checked math ONLY — this gates the "principal is
+    /// never paid out as prize" promise (see harvest_growing_pot_yield).
+    pub pot_principal_usdc: u64,
+    /// True once init_growing_pot_obligation has run (the pot obligation exists).
+    pub growing_pot_obligation_ready: bool,
 }
 
 #[account]
@@ -2229,6 +2950,22 @@ pub enum DrawStatus {
     Settled,
     /// Winner has claimed — terminal.
     Claimed,
+}
+
+// =============================================================================
+// Events
+// =============================================================================
+
+/// Emitted by harvest_growing_pot_yield. `total_redeemed` is the USDC pulled out
+/// of the pot's Kamino position this harvest; `principal_returned` is the slice
+/// sent back to growing_pot_vault (to be re-compounded); `yield_amount` is the
+/// remainder left in usdc_vault — which the existing trigger_draw prize formula
+/// then captures into the weekly prize.
+#[event]
+pub struct PotHarvested {
+    pub total_redeemed: u64,
+    pub yield_amount: u64,
+    pub principal_returned: u64,
 }
 
 // =============================================================================
@@ -2305,4 +3042,13 @@ pub enum StewfiError {
     DrawNotTimedOut,
     #[msg("Nothing to sweep — the fee vault is empty")]
     NothingToSweep,
+    // ---- M5 (Growing Pot) ----
+    #[msg("The growing-pot obligation has already been initialized")]
+    PotObligationAlreadyInit,
+    #[msg("The growing-pot obligation has not been initialized yet")]
+    PotObligationNotInit,
+    #[msg("Provided obligation does not match the pool's growing-pot obligation")]
+    WrongPotObligation,
+    #[msg("Pot redeem returned nothing — the pot has no position to harvest")]
+    NoPotYield,
 }
