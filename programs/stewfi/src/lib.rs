@@ -43,6 +43,18 @@ pub const KAMINO_FARM_MODE_COLLATERAL: u8 = 0;
 /// once `pool_config.next_draw_ts` is reached.
 pub const DRAW_INTERVAL: i64 = 7 * 24 * 60 * 60;
 
+/// Stuck-draw timeout: 1 hour in seconds. A Committed draw can only be cancelled
+/// (permissionlessly) once `now > draw.committed_ts + DRAW_TIMEOUT`. A healthy
+/// commit→reveal resolves in a few slots (~seconds), so this is generous slack
+/// for a genuine oracle stall yet far below the weekly cadence. By the time a
+/// draw reaches this timeout its VRF is already unusable for settle: Switchboard
+/// `get_value(clock.slot)` only returns the value when `clock.slot ==
+/// reveal_slot` (verified in the crate source), and an hour ≈ thousands of slots
+/// past reveal_slot — so a post-timeout reveal can no longer be consumed. This is
+/// what defeats admin reveal-grinding (audit M-01): cancel only fires on draws
+/// whose reveal is already too old to settle, so there is nothing to "re-roll."
+pub const DRAW_TIMEOUT: i64 = 60 * 60;
+
 /// Prize split — founder's locked numbers (sum = 100%). Expressed as basis
 /// points out of 10,000. Winner gets the remainder (65% + any rounding dust) so
 /// no lamports are ever lost.
@@ -756,6 +768,7 @@ pub mod stewfi {
         draw.status = DrawStatus::Pending;
         draw.randomness_account = Pubkey::default();
         draw.draw_ts = 0;
+        draw.committed_ts = 0;
         draw.total_weight = 0;
         draw.prize_pool = 0;
         draw.random_value = [0u8; 32];
@@ -866,6 +879,7 @@ pub mod stewfi {
         );
         draw.randomness_account = ctx.accounts.randomness_account.key();
         draw.draw_ts = draw_ts;
+        draw.committed_ts = draw_ts;
         draw.total_weight = total_weight;
         draw.prize_pool = prize;
         draw.status = DrawStatus::Committed;
@@ -968,6 +982,13 @@ pub mod stewfi {
         let mut derived_winner: Option<Pubkey> = None;
 
         // Iterate ALL live positions, in canonical ascending-`user` order.
+        //
+        // I-05 (DEFERRED — ops/client concern, not a program change): every live
+        // position is one tx account. With 12 fixed SettleDraw accounts, a legacy
+        // tx caps at ~51 live UserPositions without an Address Lookup Table. Above
+        // that ceiling the crank MUST submit settle via an ALT (raises the limit
+        // toward ~256) or a chunked accumulator. This is a launch gate for the
+        // off-chain crank, handled client-side — the on-chain logic is unchanged.
         for info in ctx.remaining_accounts.iter() {
             // (a) Real UserPosition owned by this program (owner + 8-byte
             //     discriminator checked) — rejects spoofed / foreign accounts.
@@ -1107,6 +1128,7 @@ pub mod stewfi {
         next_draw.status = DrawStatus::Pending;
         next_draw.randomness_account = Pubkey::default();
         next_draw.draw_ts = 0;
+        next_draw.committed_ts = 0;
         next_draw.total_weight = 0;
         next_draw.prize_pool = 0;
         next_draw.random_value = [0u8; 32];
@@ -1183,15 +1205,32 @@ pub mod stewfi {
         Ok(())
     }
 
-    /// Admin escape hatch if the oracle never reveals: unlock deposits and reset
-    /// the current round back to Pending so a fresh randomness account can be
-    /// committed. No funds move (nothing was distributed yet).
+    /// PERMISSIONLESS, TIMEOUT-GATED stuck-draw recovery (audit M-01 + M-02).
+    ///
+    /// A Committed draw can only be cancelled once it has been stuck past
+    /// `DRAW_TIMEOUT` (the oracle never revealed in time, so the round can never
+    /// be settled). ANYONE may call this — it does not depend on the admin being
+    /// online — which restores deposit/withdraw liveness after a stall (M-02).
+    ///
+    /// It also kills admin reveal-grinding (M-01): there is no admin-at-will
+    /// cancel anymore. A HEALTHY (revealable) draw cannot be cancelled, so an
+    /// admin can no longer peek the revealed VRF, dislike the winner, and
+    /// abort-and-retry. By the time the timeout elapses the VRF is unusable for
+    /// settle anyway — Switchboard `get_value(clock.slot)` only returns the value
+    /// when `clock.slot == reveal_slot`, and an hour is thousands of slots past
+    /// reveal_slot (verified in the crate source: randomness.rs get_value) — so
+    /// cancelling a timed-out draw discards nothing that could have been settled.
+    ///
+    /// On cancel: reset the round to Pending (clearing all commit state) AND
+    /// advance `next_draw_ts` by one cadence period, so there is no instant
+    /// re-trigger loop. No funds move (nothing was distributed pre-settle).
     pub fn cancel_draw(ctx: Context<CancelDraw>) -> Result<()> {
         let pool_config = &ctx.accounts.pool_config;
-        require!(
-            ctx.accounts.admin.key() == pool_config.admin,
-            StewfiError::Unauthorized
-        );
+        let clock = Clock::get()?;
+
+        // Must actually be a draw in flight (Committed); the invariant
+        // "draw_in_progress ⇒ status == Committed" always holds (both set
+        // together in trigger_draw), so this can always unstick a frozen pool.
         require!(pool_config.draw_in_progress, StewfiError::InvalidDrawStatus);
 
         let draw = &mut ctx.accounts.current_draw;
@@ -1199,16 +1238,125 @@ pub mod stewfi {
             draw.status == DrawStatus::Committed,
             StewfiError::InvalidDrawStatus
         );
+
+        // Timeout gate: only a genuinely stuck (past-timeout) draw may be
+        // cancelled. This is the whole defense — a healthy/revealable draw is NOT
+        // cancellable, so there is no abort-and-retry grinding path.
+        let deadline = draw
+            .committed_ts
+            .checked_add(DRAW_TIMEOUT)
+            .ok_or(StewfiError::Overflow)?;
+        require!(
+            clock.unix_timestamp > deadline,
+            StewfiError::DrawNotTimedOut
+        );
+
+        // Reset the round to a fresh Pending so a new randomness account can be
+        // committed once the cadence re-opens.
         draw.status = DrawStatus::Pending;
         draw.randomness_account = Pubkey::default();
         draw.draw_ts = 0;
+        draw.committed_ts = 0;
         draw.total_weight = 0;
         draw.prize_pool = 0;
+        let round = draw.round;
 
         let pool_config = &mut ctx.accounts.pool_config;
         pool_config.draw_in_progress = false;
+        // Advance the cadence so cancel can't be chained into an instant
+        // re-trigger loop — the next draw is one full interval out.
+        pool_config.next_draw_ts = clock
+            .unix_timestamp
+            .checked_add(pool_config.draw_interval)
+            .ok_or(StewfiError::Overflow)?;
 
-        msg!("Draw cancelled for round {}", ctx.accounts.current_draw.round);
+        msg!(
+            "Draw cancelled (timed out) for round {}. next_draw_ts={}",
+            round,
+            pool_config.next_draw_ts
+        );
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------------
+    // M4 — operations: operator rotation (L-01) + fee sweeps (L-02)
+    // -------------------------------------------------------------------------
+
+    /// Admin-gated operator rotation (audit L-01). Updates `pool_config.operator`
+    /// so a compromised/lost operator key can be replaced without redeploying
+    /// state. The new operator immediately gains trigger/settle rights and is the
+    /// destination authority for `sweep_operator_fees`.
+    pub fn set_operator(ctx: Context<SetOperator>, new_operator: Pubkey) -> Result<()> {
+        let pool_config = &mut ctx.accounts.pool_config;
+        require!(
+            ctx.accounts.admin.key() == pool_config.admin,
+            StewfiError::Unauthorized
+        );
+        pool_config.operator = new_operator;
+        msg!("Operator rotated to {}", new_operator);
+        Ok(())
+    }
+
+    /// Operator-gated sweep of the accrued 10% operator cut (audit L-02). Moves
+    /// the FULL `operator_vault` balance to an operator-chosen USDC destination.
+    /// PDA-signed by pool_config. Touches ONLY operator_vault — never principal
+    /// (usdc_vault) or the M5-locked growing_pot_vault.
+    pub fn sweep_operator_fees(ctx: Context<SweepOperatorFees>) -> Result<()> {
+        let pool_config = &ctx.accounts.pool_config;
+        require!(
+            ctx.accounts.crank.key() == pool_config.operator,
+            StewfiError::Unauthorized
+        );
+
+        let amount = ctx.accounts.operator_vault.amount;
+        require!(amount > 0, StewfiError::NothingToSweep);
+
+        let mint_key = pool_config.usdc_mint;
+        let bump = pool_config.bump;
+        let pool_config_seeds: &[&[u8]] = &[b"pool_config", mint_key.as_ref(), &[bump]];
+        let signer_seeds: &[&[&[u8]]] = &[pool_config_seeds];
+
+        transfer_from_vault(
+            &ctx.accounts.token_program,
+            ctx.accounts.operator_vault.to_account_info(),
+            ctx.accounts.destination.to_account_info(),
+            ctx.accounts.pool_config.to_account_info(),
+            signer_seeds,
+            amount,
+        )?;
+
+        msg!("Swept {} USDC operator fees to {}", amount, ctx.accounts.destination.key());
+        Ok(())
+    }
+
+    /// Admin-gated sweep of the accrued 5% ops cut (audit L-02). Moves the FULL
+    /// `ops_vault` balance to an admin-chosen USDC destination. PDA-signed by
+    /// pool_config. Touches ONLY ops_vault — never principal or growing_pot.
+    pub fn sweep_ops_fees(ctx: Context<SweepOpsFees>) -> Result<()> {
+        let pool_config = &ctx.accounts.pool_config;
+        require!(
+            ctx.accounts.admin.key() == pool_config.admin,
+            StewfiError::Unauthorized
+        );
+
+        let amount = ctx.accounts.ops_vault.amount;
+        require!(amount > 0, StewfiError::NothingToSweep);
+
+        let mint_key = pool_config.usdc_mint;
+        let bump = pool_config.bump;
+        let pool_config_seeds: &[&[u8]] = &[b"pool_config", mint_key.as_ref(), &[bump]];
+        let signer_seeds: &[&[&[u8]]] = &[pool_config_seeds];
+
+        transfer_from_vault(
+            &ctx.accounts.token_program,
+            ctx.accounts.ops_vault.to_account_info(),
+            ctx.accounts.destination.to_account_info(),
+            ctx.accounts.pool_config.to_account_info(),
+            signer_seeds,
+            amount,
+        )?;
+
+        msg!("Swept {} USDC ops fees to {}", amount, ctx.accounts.destination.key());
         Ok(())
     }
 }
@@ -1872,7 +2020,9 @@ pub struct ClaimDraw<'info> {
 
 #[derive(Accounts)]
 pub struct CancelDraw<'info> {
-    pub admin: Signer<'info>,
+    /// Permissionless: anyone may unstick a timed-out draw (audit M-02). The
+    /// signer pays only the tx fee — no admin gating, no account init here.
+    pub crank: Signer<'info>,
 
     #[account(
         mut,
@@ -1887,6 +2037,77 @@ pub struct CancelDraw<'info> {
         bump = current_draw.bump,
     )]
     pub current_draw: Account<'info, Draw>,
+}
+
+#[derive(Accounts)]
+pub struct SetOperator<'info> {
+    #[account(
+        mut,
+        seeds = [b"pool_config", pool_config.usdc_mint.as_ref()],
+        bump = pool_config.bump,
+    )]
+    pub pool_config: Account<'info, PoolConfig>,
+
+    pub admin: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct SweepOperatorFees<'info> {
+    /// Must be the configured operator (checked in the handler).
+    pub crank: Signer<'info>,
+
+    #[account(
+        seeds = [b"pool_config", pool_config.usdc_mint.as_ref()],
+        bump = pool_config.bump,
+    )]
+    pub pool_config: Box<Account<'info, PoolConfig>>,
+
+    /// The 10% operator escrow — the ONLY vault this ix may drain.
+    #[account(
+        mut,
+        seeds = [b"operator_vault", pool_config.usdc_mint.as_ref()],
+        bump = pool_config.operator_vault_bump,
+    )]
+    pub operator_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Operator-chosen USDC destination (mint-checked). The operator owns the
+    /// routing decision; we only pin the mint.
+    #[account(
+        mut,
+        constraint = destination.mint == pool_config.usdc_mint @ StewfiError::WrongMint,
+    )]
+    pub destination: Box<Account<'info, TokenAccount>>,
+
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct SweepOpsFees<'info> {
+    /// Must be the admin (checked in the handler).
+    pub admin: Signer<'info>,
+
+    #[account(
+        seeds = [b"pool_config", pool_config.usdc_mint.as_ref()],
+        bump = pool_config.bump,
+    )]
+    pub pool_config: Box<Account<'info, PoolConfig>>,
+
+    /// The 5% ops escrow — the ONLY vault this ix may drain.
+    #[account(
+        mut,
+        seeds = [b"ops_vault", pool_config.usdc_mint.as_ref()],
+        bump = pool_config.ops_vault_bump,
+    )]
+    pub ops_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Admin-chosen USDC destination (mint-checked).
+    #[account(
+        mut,
+        constraint = destination.mint == pool_config.usdc_mint @ StewfiError::WrongMint,
+    )]
+    pub destination: Box<Account<'info, TokenAccount>>,
+
+    pub token_program: Program<'info, Token>,
 }
 
 // =============================================================================
@@ -1972,6 +2193,10 @@ pub struct Draw {
     pub randomness_account: Pubkey,
     /// Timestamp pinned at commit; used for the winner's seconds_held at settle.
     pub draw_ts: i64,
+    /// Unix ts at which the round was committed (set in trigger_draw, 0 otherwise).
+    /// Gates the permissionless timeout cancel: a Committed draw may only be
+    /// cancelled once `now > committed_ts + DRAW_TIMEOUT` (audit M-01/M-02).
+    pub committed_ts: i64,
     /// Global total weight snapshotted at commit (on-chain, trustless).
     pub total_weight: u128,
     /// Prize (USDC) snapshotted at commit = vault − principal − pending_winnings.
@@ -2076,4 +2301,8 @@ pub enum StewfiError {
     PositionsNotSorted,
     #[msg("Passed position set is incomplete: summed weight != snapshot total_weight")]
     IncompletePositionSet,
+    #[msg("Draw has not been stuck long enough to cancel (timeout not elapsed)")]
+    DrawNotTimedOut,
+    #[msg("Nothing to sweep — the fee vault is empty")]
+    NothingToSweep,
 }

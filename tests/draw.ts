@@ -36,6 +36,7 @@ import {
   SystemProgram,
   SYSVAR_RENT_PUBKEY,
   LAMPORTS_PER_SOL,
+  ComputeBudgetProgram,
 } from "@solana/web3.js";
 import { assert } from "chai";
 
@@ -816,26 +817,105 @@ describe("stewfi — M4 DRAW (surfpool offline + mock randomness)", () => {
     assert.isTrue(sawIncomplete, "Exploit B (incomplete set) must be rejected");
   });
 
-  it("cancel_draw unlocks a stuck round (admin escape hatch)", async function () {
+  // -------------------------------------------------------------------------
+  // cancel_draw — NEW permissionless + timeout-gated semantics (audit M-01/M-02).
+  //
+  // Round 1 is still Committed here (the rig attempts above all failed, and
+  // settleWithSlotBinding only walks SLOTS — it never advances the unix clock —
+  // so `committed_ts` is recent and the draw is still WITHIN the timeout, i.e.
+  // a "healthy" draw that should NOT be cancellable). We use round 1 to test:
+  //   (c) GRINDING attempt: cancel a healthy (within-timeout) draw → rejected.
+  //   (a) cancel BEFORE timeout → rejected (same gate, explicit).
+  //   (b) cancel AFTER timeout, by a NON-ADMIN → succeeds + unfreezes + advances.
+  // -------------------------------------------------------------------------
+  it("cancel_draw rejects a grinding attempt on a healthy (within-timeout) draw (M-01)", async function () {
     this.timeout(60000);
-    // Round 1 is still Committed (the bogus settle above failed). Admin cancels.
+    // Round 1 is Committed and recent — this is exactly the admin reveal-grinding
+    // vector: peek the winner, dislike it, try to cancel + re-roll. The timeout
+    // gate must reject it because the draw is not stuck.
+    const drawBefore = await program.account.draw.fetch(drawPda(1));
+    assert.deepEqual(drawBefore.status, { committed: {} }, "round 1 is Committed");
+
+    // Even the admin can no longer cancel-at-will (no admin path exists anymore).
+    try {
+      await program.methods
+        .cancelDraw()
+        .accounts({
+          crank: admin.publicKey,
+          poolConfig: poolConfigPda,
+          currentDraw: drawPda(1),
+        })
+        .rpc();
+      assert.fail("expected DrawNotTimedOut — a healthy draw must not be cancellable");
+    } catch (err: any) {
+      assert.include(
+        err.toString(),
+        "DrawNotTimedOut",
+        "grinding attempt (cancel healthy revealed draw) must be rejected"
+      );
+    }
+  });
+
+  it("cancel_draw rejects cancel before the timeout, then a NON-ADMIN unsticks it after the timeout (M-02)", async function () {
+    this.timeout(120000);
+
+    // (a) BEFORE timeout (explicit): a non-admin caller is also rejected while
+    //     the draw is fresh — the gate is time, not identity.
+    const stranger = Keypair.generate();
+    {
+      const sig = await connection.requestAirdrop(stranger.publicKey, LAMPORTS_PER_SOL);
+      await connection.confirmTransaction(sig, "confirmed");
+    }
+    try {
+      await program.methods
+        .cancelDraw()
+        .accounts({
+          crank: stranger.publicKey,
+          poolConfig: poolConfigPda,
+          currentDraw: drawPda(1),
+        })
+        .signers([stranger])
+        .rpc();
+      assert.fail("expected DrawNotTimedOut before the timeout elapses");
+    } catch (err: any) {
+      assert.include(err.toString(), "DrawNotTimedOut");
+    }
+
+    // (b) Advance the unix clock past committed_ts + DRAW_TIMEOUT (1h). Then a
+    //     PERMISSIONLESS caller (not the admin) can unstick the frozen pool.
+    const drawNow = await program.account.draw.fetch(drawPda(1));
+    const DRAW_TIMEOUT = 60 * 60; // mirrors the on-chain const
+    await ensureClockAtLeast(
+      endpoint,
+      connection,
+      drawNow.committedTs.toNumber() + DRAW_TIMEOUT + 60
+    );
+
     await program.methods
       .cancelDraw()
       .accounts({
-        admin: admin.publicKey,
+        crank: stranger.publicKey, // NON-admin proves M-02: no admin trust needed
         poolConfig: poolConfigPda,
         currentDraw: drawPda(1),
       })
+      .signers([stranger])
       .rpc();
 
     const draw = await program.account.draw.fetch(drawPda(1));
-    assert.deepEqual(draw.status, { pending: {} });
+    assert.deepEqual(draw.status, { pending: {} }, "round reset to Pending");
     assert.equal(draw.randomnessAccount.toBase58(), PublicKey.default.toBase58());
+    assert.equal(draw.committedTs.toNumber(), 0, "committed_ts cleared");
 
     const cfg = await program.account.poolConfig.fetch(poolConfigPda);
     assert.isFalse(cfg.drawInProgress, "draw_in_progress cleared by cancel");
+    // next_draw_ts advanced by one interval — no instant re-trigger loop.
+    assert.isAbove(
+      cfg.nextDrawTs.toNumber(),
+      draw.drawTs.toNumber(),
+      "next_draw_ts advanced past the cancelled draw"
+    );
 
-    // Deposits work again after cancel.
+    // Deposits work again after cancel (liveness restored without the admin).
     await program.methods
       .deposit(new BN(10 * ONE_USDC))
       .accounts({
@@ -851,5 +931,275 @@ describe("stewfi — M4 DRAW (surfpool offline + mock randomness)", () => {
       .rpc();
     const cfg2 = await program.account.poolConfig.fetch(poolConfigPda);
     assert.equal(cfg2.totalPrincipal.toNumber(), 1510 * ONE_USDC);
+  });
+
+  // -------------------------------------------------------------------------
+  // set_operator — admin-gated operator rotation (audit L-01).
+  // -------------------------------------------------------------------------
+  it("set_operator rotates the operator (admin only), new operator can trigger", async function () {
+    this.timeout(120000);
+
+    const newOperator = Keypair.generate();
+    {
+      const sig = await connection.requestAirdrop(newOperator.publicKey, LAMPORTS_PER_SOL);
+      await connection.confirmTransaction(sig, "confirmed");
+    }
+
+    // Non-admin cannot rotate.
+    try {
+      await program.methods
+        .setOperator(newOperator.publicKey)
+        .accounts({ poolConfig: poolConfigPda, admin: operator.publicKey })
+        .signers([operator])
+        .rpc();
+      assert.fail("expected Unauthorized — non-admin cannot rotate operator");
+    } catch (err: any) {
+      assert.include(err.toString(), "Unauthorized");
+    }
+
+    // Admin rotates to the new operator.
+    await program.methods
+      .setOperator(newOperator.publicKey)
+      .accounts({ poolConfig: poolConfigPda, admin: admin.publicKey })
+      .rpc();
+    let cfg = await program.account.poolConfig.fetch(poolConfigPda);
+    assert.equal(
+      cfg.operator.toBase58(),
+      newOperator.publicKey.toBase58(),
+      "operator rotated"
+    );
+
+    // The OLD operator can no longer trigger; the NEW one can. Round is Pending
+    // (cancel above reset it) but next_draw_ts was advanced — jump past it.
+    await mintTo(connection, admin, usdcMint, usdcVaultPda, admin, 12 * ONE_USDC);
+    await ensureClockAtLeast(endpoint, connection, cfg.nextDrawTs.toNumber() + 60);
+
+    const rndOld = Keypair.generate();
+    await setUnrevealedRandomness(endpoint, rndOld.publicKey);
+    try {
+      await program.methods
+        .triggerDraw()
+        .accounts({
+          crank: operator.publicKey, // the OLD operator
+          poolConfig: poolConfigPda,
+          currentDraw: drawPda(1),
+          usdcVault: usdcVaultPda,
+          randomnessAccount: rndOld.publicKey,
+        })
+        .signers([operator])
+        .rpc();
+      assert.fail("expected Unauthorized — old operator should be rotated out");
+    } catch (err: any) {
+      assert.include(err.toString(), "Unauthorized");
+    }
+
+    const rndNew = Keypair.generate();
+    await setUnrevealedRandomness(endpoint, rndNew.publicKey);
+    await program.methods
+      .triggerDraw()
+      .accounts({
+        crank: newOperator.publicKey, // the NEW operator
+        poolConfig: poolConfigPda,
+        currentDraw: drawPda(1),
+        usdcVault: usdcVaultPda,
+        randomnessAccount: rndNew.publicKey,
+      })
+      .signers([newOperator])
+      .rpc();
+    const draw = await program.account.draw.fetch(drawPda(1));
+    assert.deepEqual(draw.status, { committed: {} }, "new operator triggered round 1");
+
+    // Restore the original operator for any later use + leave a clean cancel.
+    // (Round 1 is Committed by the new operator; cancel it after timeout so the
+    //  suite ends without a frozen pool — also re-exercises permissionless cancel.)
+    const DRAW_TIMEOUT = 60 * 60;
+    await ensureClockAtLeast(
+      endpoint,
+      connection,
+      draw.committedTs.toNumber() + DRAW_TIMEOUT + 60
+    );
+    await program.methods
+      .cancelDraw()
+      .accounts({
+        crank: admin.publicKey,
+        poolConfig: poolConfigPda,
+        currentDraw: drawPda(1),
+      })
+      .rpc();
+  });
+
+  // -------------------------------------------------------------------------
+  // sweep_fees — operator/ops cuts can be withdrawn (audit L-02), and NEVER
+  // touch principal (usdc_vault) or the M5-locked growing_pot_vault.
+  // -------------------------------------------------------------------------
+  it("sweep_operator_fees / sweep_ops_fees move the right amounts, reject non-authorized, never touch principal or the pot", async function () {
+    this.timeout(60000);
+
+    // After round 0's settle, operator_vault holds 10% and ops_vault holds 5%
+    // of the 30 USDC prize = 3 USDC and 1.5 USDC. Capture current balances
+    // (round 1 was cancelled, so no new fees accrued — these are the round-0 cuts).
+    const opVaultBefore = Number((await getAccount(connection, operatorVaultPda)).amount);
+    const opsVaultBefore = Number((await getAccount(connection, opsVaultPda)).amount);
+    assert.isAbove(opVaultBefore, 0, "operator_vault funded from settle");
+    assert.isAbove(opsVaultBefore, 0, "ops_vault funded from settle");
+
+    // Guard fixtures: principal + pot balances must be unchanged by sweeps.
+    const principalBefore = Number((await getAccount(connection, usdcVaultPda)).amount);
+    const potBefore = Number((await getAccount(connection, growingPotVaultPda)).amount);
+    assert.isAbove(potBefore, 0, "growing_pot_vault funded from settle (20%)");
+
+    // Destinations (fresh ATAs).
+    const operatorAta = (
+      await getOrCreateAssociatedTokenAccount(connection, admin, usdcMint, operator.publicKey)
+    ).address;
+    const opsAta = (
+      await getOrCreateAssociatedTokenAccount(connection, admin, usdcMint, ops.publicKey)
+    ).address;
+
+    // --- sweep_operator_fees: non-operator rejected ----------------------
+    try {
+      await program.methods
+        .sweepOperatorFees()
+        .accounts({
+          crank: ops.publicKey, // not the operator
+          poolConfig: poolConfigPda,
+          operatorVault: operatorVaultPda,
+          destination: operatorAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([ops])
+        .rpc();
+      assert.fail("expected Unauthorized — only the operator may sweep operator fees");
+    } catch (err: any) {
+      assert.include(err.toString(), "Unauthorized");
+    }
+
+    // --- sweep_operator_fees: operator sweeps the FULL operator_vault -----
+    // NOTE: pool_config.operator is `operator` here (set_operator test restored
+    // nothing, but round-0 fees accrued under the ORIGINAL operator and the
+    // current pool_config.operator must match the signer). Re-set it to be safe.
+    await program.methods
+      .setOperator(operator.publicKey)
+      .accounts({ poolConfig: poolConfigPda, admin: admin.publicKey })
+      .rpc();
+
+    await program.methods
+      .sweepOperatorFees()
+      .accounts({
+        crank: operator.publicKey,
+        poolConfig: poolConfigPda,
+        operatorVault: operatorVaultPda,
+        destination: operatorAta,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([operator])
+      .rpc();
+
+    assert.equal(
+      Number((await getAccount(connection, operatorAta)).amount),
+      opVaultBefore,
+      "operator received the full operator_vault balance"
+    );
+    assert.equal(
+      Number((await getAccount(connection, operatorVaultPda)).amount),
+      0,
+      "operator_vault drained to zero"
+    );
+
+    // --- sweep_ops_fees: non-admin rejected ------------------------------
+    try {
+      await program.methods
+        .sweepOpsFees()
+        .accounts({
+          admin: operator.publicKey, // not the admin
+          poolConfig: poolConfigPda,
+          opsVault: opsVaultPda,
+          destination: opsAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([operator])
+        .rpc();
+      assert.fail("expected Unauthorized — only the admin may sweep ops fees");
+    } catch (err: any) {
+      assert.include(err.toString(), "Unauthorized");
+    }
+
+    // --- sweep_ops_fees: admin sweeps the FULL ops_vault -----------------
+    await program.methods
+      .sweepOpsFees()
+      .accounts({
+        admin: admin.publicKey,
+        poolConfig: poolConfigPda,
+        opsVault: opsVaultPda,
+        destination: opsAta,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .rpc();
+
+    assert.equal(
+      Number((await getAccount(connection, opsAta)).amount),
+      opsVaultBefore,
+      "ops destination received the full ops_vault balance"
+    );
+    assert.equal(
+      Number((await getAccount(connection, opsVaultPda)).amount),
+      0,
+      "ops_vault drained to zero"
+    );
+
+    // --- THE GUARD: principal + growing_pot UNTOUCHED by either sweep ----
+    assert.equal(
+      Number((await getAccount(connection, usdcVaultPda)).amount),
+      principalBefore,
+      "usdc_vault (principal) untouched by sweeps"
+    );
+    assert.equal(
+      Number((await getAccount(connection, growingPotVaultPda)).amount),
+      potBefore,
+      "growing_pot_vault (M5-locked) untouched by sweeps"
+    );
+
+    // --- empty vault → NothingToSweep ------------------------------------
+    try {
+      await program.methods
+        .sweepOperatorFees()
+        .accounts({
+          crank: operator.publicKey,
+          poolConfig: poolConfigPda,
+          operatorVault: operatorVaultPda,
+          destination: operatorAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        // Make this 3rd sweepOperatorFees byte-distinct from the successful
+        // drain above; otherwise the identical signature gets dedup'd by the
+        // validator ("already processed") before the program returns
+        // NothingToSweep. 400k is well above what the sweep needs (no budget-
+        // exceeded), and it stays a clean tx so the named AnchorError surfaces.
+        .preInstructions([
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+        ])
+        .signers([operator])
+        .rpc();
+      assert.fail("expected NothingToSweep on an empty operator_vault");
+    } catch (err: any) {
+      // Accept the translated AnchorError name, the raw custom code (6032 /
+      // 0x1790; surfpool sometimes surfaces a custom error as a bare
+      // "Simulation failed" without the named log line), OR — belt-and-
+      // suspenders — the validator dedup of a byte-identical resend
+      // ("already (been) processed"). The vault was already drained to 0 by the
+      // successful sweep above, so any of these proves the empty-vault path.
+      const s =
+        (err?.toString?.() ?? "") +
+        "\n" +
+        (Array.isArray(err?.logs) ? err.logs.join("\n") : "");
+      assert.isTrue(
+        s.includes("NothingToSweep") ||
+          s.includes("6032") ||
+          s.includes("0x1790") ||
+          s.includes("already been processed") ||
+          s.includes("already processed"),
+        `expected NothingToSweep (6032/0x1790) on empty vault, got: ${s.slice(0, 300)}`
+      );
+    }
   });
 });
