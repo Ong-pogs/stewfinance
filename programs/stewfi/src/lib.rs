@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 use kamino_lend::cpi::accounts as klend_accounts;
 use kamino_lend::program::KaminoLending;
+use switchboard_on_demand::accounts::RandomnessAccountData;
 
 declare_id!("8uDmfYPMBaiLLwfZGAnhNaDm48kx19hD8kPdiR7XiRLD");
 
@@ -34,6 +35,30 @@ pub const KAMINO_OBLIGATION_ID: u8 = 0;
 /// 0 = Collateral farm (the USDC reserve's collateral farm); 1 = Debt farm.
 pub const KAMINO_FARM_MODE_COLLATERAL: u8 = 0;
 
+// -----------------------------------------------------------------------------
+// M4 — DRAW (Switchboard VRF + weighted winner + prize split) constants
+// -----------------------------------------------------------------------------
+
+/// Weekly draw cadence: 7 days in seconds. The crank can only trigger a draw
+/// once `pool_config.next_draw_ts` is reached.
+pub const DRAW_INTERVAL: i64 = 7 * 24 * 60 * 60;
+
+/// Prize split — founder's locked numbers (sum = 100%). Expressed as basis
+/// points out of 10,000. Winner gets the remainder (65% + any rounding dust) so
+/// no lamports are ever lost.
+pub const GROWING_POT_BPS: u64 = 2_000; // 20% → growing_pot_vault (M5 sweeps)
+pub const OPERATOR_BPS: u64 = 1_000; // 10% → operator_vault
+pub const OPS_BPS: u64 = 500; //  5% → ops_vault
+// Winner = prize − growing_pot − operator − ops  (≈ 65% + dust)
+pub const BPS_DENOMINATOR: u64 = 10_000;
+
+/// Switchboard On-Demand program id (mainnet). `RandomnessAccountData::owner()`
+/// resolves to this at runtime unless the `devnet` feature / `SB_ENV=devnet` is
+/// set (StewFi enables neither), so this is the owner we expect even on a
+/// surfpool mainnet fork. Used as a defense-in-depth owner check in trigger_draw.
+pub const SWITCHBOARD_ON_DEMAND_PID: Pubkey =
+    pubkey!("SBondMDrcV3K4kxZR1HNVT7osZxAHVHgYXL5Ze1oMUv");
+
 // =============================================================================
 // Program
 // =============================================================================
@@ -61,6 +86,16 @@ pub mod stewfi {
         config.kamino_obligation = Pubkey::default();
         config.kamino_deposited = 0;
         config.last_kamino_sync = 0;
+        // M4 fields start zeroed: no principal, no draw, no operator/ops wired.
+        config.total_principal = 0;
+        config.sum_amount = 0;
+        config.sum_amount_first_ts = 0;
+        config.draw_in_progress = false;
+        config.operator = Pubkey::default();
+        config.ops = Pubkey::default();
+        config.draw_interval = DRAW_INTERVAL;
+        config.next_draw_ts = 0;
+        config.draw_accounts_ready = false;
 
         msg!("StewFi initialized. Admin: {}", config.admin);
         Ok(())
@@ -81,6 +116,9 @@ pub mod stewfi {
 
         // Pool must be active
         require!(!pool_config.paused, StewfiError::PoolPaused);
+
+        // Weight set must be frozen during a draw's commit→reveal window (M4).
+        require!(!pool_config.draw_in_progress, StewfiError::DrawInProgress);
 
         // Per-deposit minimum
         require!(amount >= MIN_DEPOSIT, StewfiError::DepositTooSmall);
@@ -122,6 +160,29 @@ pub mod stewfi {
         user_position.last_deposit_ts = clock.unix_timestamp;
         user_position.bump = ctx.bumps.user_position;
 
+        // --- M4 trustless-winner accumulators -------------------------------
+        // Maintain on-chain running sums so settle_draw can compute the GLOBAL
+        // total_weight without iterating every UserPosition:
+        //   total_weight = draw_ts * Σamount − Σ(amount * first_deposit_ts)
+        // We track S1 = Σ position.amount and S2 = Σ(position.amount * first_ts).
+        // On a top-up only the NEW slice (`amount`) is added, using the
+        // position's STICKY first_deposit_ts — so both sums always equal a full
+        // re-sum over live positions (first_deposit_ts never changes on top-up).
+        let first_ts = user_position.first_deposit_ts;
+        let pool_config = &mut ctx.accounts.pool_config;
+        pool_config.total_principal = pool_config
+            .total_principal
+            .checked_add(amount)
+            .ok_or(StewfiError::Overflow)?;
+        pool_config.sum_amount = pool_config
+            .sum_amount
+            .checked_add(amount as u128)
+            .ok_or(StewfiError::Overflow)?;
+        pool_config.sum_amount_first_ts = pool_config
+            .sum_amount_first_ts
+            .checked_add((amount as u128).checked_mul(first_ts as u128).ok_or(StewfiError::Overflow)?)
+            .ok_or(StewfiError::Overflow)?;
+
         Ok(())
     }
 
@@ -148,6 +209,9 @@ pub mod stewfi {
         let user_position = &ctx.accounts.user_position;
         let clock = Clock::get()?;
 
+        // Weight set must be frozen during a draw's commit→reveal window (M4).
+        require!(!pool_config.draw_in_progress, StewfiError::DrawInProgress);
+
         require!(
             user_position.withdraw_requested_at > 0,
             StewfiError::WithdrawNotRequested
@@ -164,6 +228,9 @@ pub mod stewfi {
 
         let amount = user_position.amount;
         require!(amount > 0, StewfiError::NoDeposit);
+
+        // Capture the position's accumulator contribution before it closes.
+        let first_ts = user_position.first_deposit_ts;
 
         // PDA-signed transfer: only the pool_config PDA can sign for the vault.
         // We construct the seed slices manually for the signer.
@@ -183,6 +250,21 @@ pub mod stewfi {
             signer_seeds,
         );
         token::transfer(cpi_ctx, amount)?;
+
+        // --- M4 trustless-winner accumulators -------------------------------
+        // Withdraw closes the WHOLE position, so subtract its full contribution
+        // from the running sums (the mirror of deposit's add). saturating_sub on
+        // the two u128 sums as belt-and-suspenders against any tracking drift —
+        // total_principal uses checked_sub since it must stay exact for the prize.
+        let pool_config = &mut ctx.accounts.pool_config;
+        pool_config.total_principal = pool_config
+            .total_principal
+            .checked_sub(amount)
+            .ok_or(StewfiError::Overflow)?;
+        pool_config.sum_amount = pool_config.sum_amount.saturating_sub(amount as u128);
+        pool_config.sum_amount_first_ts = pool_config
+            .sum_amount_first_ts
+            .saturating_sub((amount as u128).saturating_mul(first_ts as u128));
 
         // UserPosition closes via `close = user` constraint — rent refunded to user.
         Ok(())
@@ -596,6 +678,577 @@ pub mod stewfi {
         );
         Ok(())
     }
+
+    // -------------------------------------------------------------------------
+    // M4 — The Weekly DRAW
+    //
+    // Flow (per .superstack/m4-research.md):
+    //   init_draw_accounts (admin, once)  -> create growing_pot/operator/ops
+    //                                         vaults, set operator+ops pubkeys,
+    //                                         create round-0 Draw, arm cadence.
+    //   trigger_draw (operator)           -> atomic w/ switchboard commitIx;
+    //                                         snapshot prize + total_weight, lock
+    //                                         deposits, record randomness acct.
+    //   settle_draw  (operator)           -> atomic w/ switchboard revealIx;
+    //                                         slot-bound get_value, TRUSTLESS
+    //                                         winner verify, split 65/20/10/5,
+    //                                         advance round, unlock deposits.
+    //   claim_draw   (winner)             -> winner pulls their 65%.
+    //   cancel_draw  (admin)              -> stuck-oracle escape: unlock, reset.
+    //
+    // Trust model: FULLY TRUSTLESS WINNER. Two on-chain guarantees combine:
+    //   (1) total_weight is recomputed ON-CHAIN at commit from
+    //       pool_config.{sum_amount, sum_amount_first_ts} (maintained in
+    //       deposit/withdraw) — never trusted from the crank.
+    //   (2) The winning POSITION is DERIVED ON-CHAIN at settle by iterating every
+    //       live UserPosition (passed via remaining_accounts) in canonical order,
+    //       accumulating the real cumulative weights, and proving the set is
+    //       complete (Σweight == total_weight). The crank supplies no cum_start
+    //       and cannot steer the winner. See settle_draw.
+    // The only residual trust is Switchboard VRF (unpredictable value, committed
+    // before reveal) + Solana itself. Operator-gating remains as cadence control
+    // (defense-in-depth), but is NOT the integrity mechanism.
+    // -------------------------------------------------------------------------
+
+    /// Admin-only setter for `paused` (fixes audit F-02: `paused` had no setter).
+    pub fn set_paused(ctx: Context<SetPaused>, paused: bool) -> Result<()> {
+        let pool_config = &mut ctx.accounts.pool_config;
+        require!(
+            ctx.accounts.admin.key() == pool_config.admin,
+            StewfiError::Unauthorized
+        );
+        pool_config.paused = paused;
+        msg!("Pool paused = {}", paused);
+        Ok(())
+    }
+
+    /// Admin-only, one-time. Stand up the M4 draw infrastructure:
+    ///   - growing_pot_vault / operator_vault / ops_vault (PDA-owned USDC accts)
+    ///   - record operator + ops payout pubkeys
+    ///   - create the round-0 `Draw` (status Pending, accepting deposits)
+    ///   - arm the weekly cadence (`next_draw_ts = now + draw_interval`)
+    ///
+    /// Kept separate from M1 `initialize` so M1's tested account list is untouched.
+    pub fn init_draw_accounts(
+        ctx: Context<InitDrawAccounts>,
+        operator: Pubkey,
+        ops: Pubkey,
+    ) -> Result<()> {
+        let pool_config = &ctx.accounts.pool_config;
+        require!(
+            ctx.accounts.admin.key() == pool_config.admin,
+            StewfiError::Unauthorized
+        );
+        require!(
+            !pool_config.draw_accounts_ready,
+            StewfiError::DrawAccountsAlreadyInit
+        );
+        require!(
+            pool_config.current_round == 0,
+            StewfiError::DrawAccountsAlreadyInit
+        );
+
+        let clock = Clock::get()?;
+
+        // Round-0 Draw — the steady state that accepts deposits until triggered.
+        let draw = &mut ctx.accounts.current_draw;
+        draw.round = 0;
+        draw.status = DrawStatus::Pending;
+        draw.randomness_account = Pubkey::default();
+        draw.draw_ts = 0;
+        draw.total_weight = 0;
+        draw.prize_pool = 0;
+        draw.random_value = [0u8; 32];
+        draw.winner = Pubkey::default();
+        draw.winner_amount = 0;
+        draw.growing_pot_amount = 0;
+        draw.operator_amount = 0;
+        draw.ops_amount = 0;
+        draw.winner_claimed = false;
+        draw.bump = ctx.bumps.current_draw;
+
+        let pool_config = &mut ctx.accounts.pool_config;
+        pool_config.operator = operator;
+        pool_config.ops = ops;
+        pool_config.growing_pot_vault_bump = ctx.bumps.growing_pot_vault;
+        pool_config.operator_vault_bump = ctx.bumps.operator_vault;
+        pool_config.ops_vault_bump = ctx.bumps.ops_vault;
+        pool_config.next_draw_ts = clock
+            .unix_timestamp
+            .checked_add(pool_config.draw_interval)
+            .ok_or(StewfiError::Overflow)?;
+        pool_config.draw_accounts_ready = true;
+
+        msg!(
+            "Draw accounts ready. operator={}, ops={}, next_draw_ts={}",
+            operator,
+            ops,
+            pool_config.next_draw_ts
+        );
+        Ok(())
+    }
+
+    /// Operator-gated. Commit the current round to a Switchboard randomness
+    /// account and lock the weight set. The crank PREPENDS the Switchboard
+    /// `commitIx` in the SAME tx (StewFi does not CPI Switchboard); this ix only
+    /// records the randomness account, snapshots the prize + global total_weight,
+    /// and flips the round to Committed.
+    ///
+    /// Snapshotting here (not at settle) pins `draw_ts` and `total_weight` to the
+    /// commit moment, so the off-chain crank and on-chain settle use identical
+    /// numbers for the winner-window check (see m4-research §9 gotcha-11).
+    pub fn trigger_draw(ctx: Context<TriggerDraw>) -> Result<()> {
+        let pool_config = &ctx.accounts.pool_config;
+        let clock = Clock::get()?;
+
+        require!(!pool_config.paused, StewfiError::PoolPaused);
+        require!(
+            pool_config.draw_accounts_ready,
+            StewfiError::DrawAccountsNotInit
+        );
+        // Operator-gated (admin or the configured operator may trigger).
+        require!(
+            ctx.accounts.crank.key() == pool_config.operator
+                || ctx.accounts.crank.key() == pool_config.admin,
+            StewfiError::Unauthorized
+        );
+        // Weekly cadence gate.
+        require!(
+            clock.unix_timestamp >= pool_config.next_draw_ts,
+            StewfiError::DrawNotReady
+        );
+        // Can't start a draw while one is mid-flight.
+        require!(!pool_config.draw_in_progress, StewfiError::DrawInProgress);
+
+        // Compute the GLOBAL total_weight ON-CHAIN from the running accumulators:
+        //   total_weight = draw_ts * Σamount − Σ(amount * first_deposit_ts)
+        let draw_ts = clock.unix_timestamp;
+        let total_weight = (draw_ts as u128)
+            .checked_mul(pool_config.sum_amount)
+            .ok_or(StewfiError::Overflow)?
+            .checked_sub(pool_config.sum_amount_first_ts)
+            .ok_or(StewfiError::Overflow)?;
+        require!(total_weight > 0, StewfiError::NoEntries);
+
+        // Snapshot the prize: usdc_vault minus principal minus prizes still owed
+        // to past unclaimed winners (those sit in usdc_vault until claim_draw).
+        // The crank must fully harvest Kamino into usdc_vault before triggering.
+        let vault_amount = ctx.accounts.usdc_vault.amount;
+        let owed = pool_config
+            .total_principal
+            .checked_add(pool_config.pending_winnings)
+            .ok_or(StewfiError::Overflow)?;
+        require!(vault_amount >= owed, StewfiError::FundsStillInKamino);
+        let prize = vault_amount
+            .checked_sub(owed)
+            .ok_or(StewfiError::Overflow)?;
+        require!(prize > 0, StewfiError::NothingToDraw);
+
+        // Validate the randomness account is a real, un-revealed On-Demand acct.
+        require!(
+            *ctx.accounts.randomness_account.owner == SWITCHBOARD_ON_DEMAND_PID,
+            StewfiError::InvalidRandomnessAccount
+        );
+        let randomness_data =
+            RandomnessAccountData::parse(ctx.accounts.randomness_account.data.borrow())
+                .map_err(|_| StewfiError::InvalidRandomnessAccount)?;
+        // Single-use: reject an already-revealed (replayed) randomness account.
+        require!(
+            randomness_data.reveal_slot == 0,
+            StewfiError::RandomnessAlreadyRevealed
+        );
+
+        // Record + lock.
+        let draw = &mut ctx.accounts.current_draw;
+        require!(
+            draw.status == DrawStatus::Pending,
+            StewfiError::InvalidDrawStatus
+        );
+        draw.randomness_account = ctx.accounts.randomness_account.key();
+        draw.draw_ts = draw_ts;
+        draw.total_weight = total_weight;
+        draw.prize_pool = prize;
+        draw.status = DrawStatus::Committed;
+
+        let pool_config = &mut ctx.accounts.pool_config;
+        pool_config.draw_in_progress = true;
+
+        msg!(
+            "Draw committed for round {}. prize={} total_weight={} draw_ts={}",
+            draw.round,
+            prize,
+            total_weight,
+            draw_ts
+        );
+        Ok(())
+    }
+
+    /// Operator-gated. Atomic with the Switchboard `revealIx` (same tx). Reads
+    /// the revealed value slot-bound (`get_value(clock.slot)`), determines the
+    /// winner FULLY ON-CHAIN by iterating every live position, splits the prize
+    /// 65/20/10/5, advances the round, and unlocks deposits.
+    ///
+    /// remaining_accounts: ALL live `UserPosition`s for the pool, in CANONICAL
+    /// order — ascending by `user` pubkey. The crank passes them; the program
+    /// does NOT trust their order or completeness blindly — it verifies both.
+    ///
+    /// Trustless verify (the winner is DERIVED, not supplied):
+    ///   1. ticket `t = u128(value[0..16]) % draw.total_weight` (total_weight is
+    ///      the on-chain accumulator snapshot from commit — not a crank input).
+    ///   2. Iterate remaining_accounts: each must be a real `UserPosition` owned
+    ///      by THIS program (Account::try_from checks owner + discriminator), at
+    ///      its canonical PDA `[b"user_position", user]`, in STRICTLY ascending
+    ///      `user` order (rejects dups / reorderings / omissions of ordering).
+    ///      Accumulate `running_weight += amount × (draw_ts − first_deposit_ts)`
+    ///      and track each position's `[cum_before, cum_before + weight)` window.
+    ///   3. COMPLETENESS: `running_weight == draw.total_weight`. Because
+    ///      draw_in_progress froze the weight set at commit, the live positions
+    ///      ARE the accumulator's set — so equality proves the passed set is
+    ///      exactly that set (operator can't omit/add/reorder).
+    ///   4. The winner is the position whose window contains `t`; require the
+    ///      passed `winner_position` == that derived winner.
+    /// There is no `winner_cum_start` input to forge: the cumulative offset is
+    /// computed on-chain from the real positions. A malicious operator cannot
+    /// steer the win — the only freedom (the VRF value) is committed before the
+    /// reveal, and Switchboard guarantees it's unpredictable at commit time.
+    pub fn settle_draw<'info>(
+        ctx: Context<'_, '_, 'info, 'info, SettleDraw<'info>>,
+    ) -> Result<()> {
+        let pool_config = &ctx.accounts.pool_config;
+        let clock = Clock::get()?;
+
+        // Operator-gating stays as defense-in-depth (cadence control), but it is
+        // NO LONGER the integrity mechanism — the on-chain winner derivation is.
+        require!(
+            ctx.accounts.crank.key() == pool_config.operator
+                || ctx.accounts.crank.key() == pool_config.admin,
+            StewfiError::Unauthorized
+        );
+        require!(pool_config.draw_in_progress, StewfiError::InvalidDrawStatus);
+
+        let draw = &ctx.accounts.current_draw;
+        require!(
+            draw.status == DrawStatus::Committed,
+            StewfiError::InvalidDrawStatus
+        );
+        // The randomness account must be the one committed for this round.
+        require!(
+            ctx.accounts.randomness_account.key() == draw.randomness_account,
+            StewfiError::InvalidRandomnessAccount
+        );
+
+        // --- read the revealed value, slot-bound (secure) -------------------
+        let value = {
+            let randomness_data =
+                RandomnessAccountData::parse(ctx.accounts.randomness_account.data.borrow())
+                    .map_err(|_| StewfiError::InvalidRandomnessAccount)?;
+            // get_value returns the bytes IFF clock.slot == reveal_slot; the
+            // crank bundles revealIx in this same tx so the slots match.
+            randomness_data
+                .get_value(clock.slot)
+                .map_err(|_| StewfiError::RandomnessNotResolved)?
+        };
+
+        // --- trustless winner DERIVATION (on-chain, over real positions) ----
+        let total_weight = draw.total_weight;
+        require!(total_weight > 0, StewfiError::NoEntries);
+        // ticket is always < total_weight (modulo total_weight, which is > 0), so
+        // a complete position set always contains exactly one winning window.
+        let ticket = u128::from_le_bytes(
+            value[0..16]
+                .try_into()
+                .map_err(|_| StewfiError::BadWinnerProof)?,
+        ) % total_weight;
+        let draw_ts = draw.draw_ts;
+        let expected_winner = ctx.accounts.winner_position.key();
+        let program_id = ctx.program_id;
+
+        let mut running_weight: u128 = 0;
+        let mut last_user: Option<Pubkey> = None;
+        let mut derived_winner: Option<Pubkey> = None;
+
+        // Iterate ALL live positions, in canonical ascending-`user` order.
+        for info in ctx.remaining_accounts.iter() {
+            // (a) Real UserPosition owned by this program (owner + 8-byte
+            //     discriminator checked) — rejects spoofed / foreign accounts.
+            let position: Account<UserPosition> = Account::try_from(info)
+                .map_err(|_| StewfiError::BadPositionAccount)?;
+
+            // (b) Canonical PDA: the account must live at [b"user_position", user]
+            //     with its own stored bump — pins `user` to the real address so a
+            //     forged `user` field can't sneak in.
+            let expected_pda = Pubkey::create_program_address(
+                &[b"user_position", position.user.as_ref(), &[position.bump]],
+                program_id,
+            )
+            .map_err(|_| StewfiError::BadPositionAccount)?;
+            require!(
+                info.key() == expected_pda,
+                StewfiError::BadPositionAccount
+            );
+
+            // (c) Strictly ascending `user` — rejects duplicates AND fixes a
+            //     single canonical ordering both crank and chain agree on.
+            if let Some(prev) = last_user {
+                require!(position.user > prev, StewfiError::PositionsNotSorted);
+            }
+            last_user = Some(position.user);
+
+            // (d) On-chain window: weight = amount × seconds_held. A position
+            //     deposited at exactly draw_ts (or, defensively, "after") has
+            //     seconds_held <= 0 → weight 0 → empty window, can't win.
+            let seconds_held = draw_ts.saturating_sub(position.first_deposit_ts);
+            let weight: u128 = if seconds_held > 0 {
+                (position.amount as u128)
+                    .checked_mul(seconds_held as u128)
+                    .ok_or(StewfiError::Overflow)?
+            } else {
+                0
+            };
+
+            let cum_before = running_weight;
+            running_weight = running_weight
+                .checked_add(weight)
+                .ok_or(StewfiError::Overflow)?;
+
+            // The winner is the position whose window [cum_before, cum_before+weight)
+            // contains the ticket. weight==0 windows are empty and never match.
+            if weight > 0 && cum_before <= ticket && ticket < running_weight {
+                // At most one window can contain the ticket (windows are disjoint
+                // and contiguous); record it. Don't break — we must finish the
+                // loop to prove completeness via the running_weight total below.
+                derived_winner = Some(position.key());
+            }
+        }
+
+        // COMPLETENESS: the summed weight of the passed set must equal the
+        // on-chain total_weight snapshotted at commit. Since draw_in_progress
+        // froze deposits/withdraws since commit, the live set == the accumulator
+        // set, so equality proves the passed set is EXACTLY that set — the
+        // operator cannot omit a position (sum falls short), inject a fake one
+        // (try_from / PDA check rejects it), or reorder it (ascending check).
+        require!(
+            running_weight == total_weight,
+            StewfiError::IncompletePositionSet
+        );
+
+        // The derived winner must exist (guaranteed when the set is complete and
+        // total_weight > 0) and must equal the passed winner_position account.
+        let derived_winner = derived_winner.ok_or(StewfiError::BadWinnerProof)?;
+        require!(
+            derived_winner == expected_winner,
+            StewfiError::BadWinnerProof
+        );
+
+        // --- prize split (dust → winner; see m4-research §8) ----------------
+        let prize = draw.prize_pool;
+        let growing_pot = mul_div_bps(prize, GROWING_POT_BPS)?;
+        let operator_cut = mul_div_bps(prize, OPERATOR_BPS)?;
+        let ops_cut = mul_div_bps(prize, OPS_BPS)?;
+        let winner_amount = prize
+            .checked_sub(growing_pot)
+            .and_then(|v| v.checked_sub(operator_cut))
+            .and_then(|v| v.checked_sub(ops_cut))
+            .ok_or(StewfiError::Overflow)?;
+
+        // PDA-signed transfers from usdc_vault (authority = pool_config).
+        let mint_key = pool_config.usdc_mint;
+        let bump = pool_config.bump;
+        let pool_config_seeds: &[&[u8]] = &[b"pool_config", mint_key.as_ref(), &[bump]];
+        let signer_seeds: &[&[&[u8]]] = &[pool_config_seeds];
+
+        transfer_from_vault(
+            &ctx.accounts.token_program,
+            ctx.accounts.usdc_vault.to_account_info(),
+            ctx.accounts.growing_pot_vault.to_account_info(),
+            ctx.accounts.pool_config.to_account_info(),
+            signer_seeds,
+            growing_pot,
+        )?;
+        transfer_from_vault(
+            &ctx.accounts.token_program,
+            ctx.accounts.usdc_vault.to_account_info(),
+            ctx.accounts.operator_vault.to_account_info(),
+            ctx.accounts.pool_config.to_account_info(),
+            signer_seeds,
+            operator_cut,
+        )?;
+        transfer_from_vault(
+            &ctx.accounts.token_program,
+            ctx.accounts.usdc_vault.to_account_info(),
+            ctx.accounts.ops_vault.to_account_info(),
+            ctx.accounts.pool_config.to_account_info(),
+            signer_seeds,
+            ops_cut,
+        )?;
+        // Winner's 65% stays in usdc_vault, recorded for a later claim_draw.
+
+        // --- record outcome + advance round ---------------------------------
+        let winner_pubkey = ctx.accounts.winner_position.user;
+        let draw = &mut ctx.accounts.current_draw;
+        draw.random_value = value;
+        draw.winner = winner_pubkey;
+        draw.winner_amount = winner_amount;
+        draw.growing_pot_amount = growing_pot;
+        draw.operator_amount = operator_cut;
+        draw.ops_amount = ops_cut;
+        draw.status = DrawStatus::Settled;
+
+        let next_round = ctx
+            .accounts
+            .current_draw
+            .round
+            .checked_add(1)
+            .ok_or(StewfiError::Overflow)?;
+
+        // Initialize the next round's Draw (Pending, accepting deposits).
+        let next_draw = &mut ctx.accounts.next_draw;
+        next_draw.round = next_round;
+        next_draw.status = DrawStatus::Pending;
+        next_draw.randomness_account = Pubkey::default();
+        next_draw.draw_ts = 0;
+        next_draw.total_weight = 0;
+        next_draw.prize_pool = 0;
+        next_draw.random_value = [0u8; 32];
+        next_draw.winner = Pubkey::default();
+        next_draw.winner_amount = 0;
+        next_draw.growing_pot_amount = 0;
+        next_draw.operator_amount = 0;
+        next_draw.ops_amount = 0;
+        next_draw.winner_claimed = false;
+        next_draw.bump = ctx.bumps.next_draw;
+
+        let pool_config = &mut ctx.accounts.pool_config;
+        pool_config.current_round = next_round;
+        pool_config.draw_in_progress = false;
+        pool_config.pending_winnings = pool_config
+            .pending_winnings
+            .checked_add(winner_amount)
+            .ok_or(StewfiError::Overflow)?;
+        pool_config.next_draw_ts = clock
+            .unix_timestamp
+            .checked_add(pool_config.draw_interval)
+            .ok_or(StewfiError::Overflow)?;
+
+        msg!(
+            "Draw round {} settled. winner={} prize={} (winner {} / pot {} / op {} / ops {})",
+            next_round - 1,
+            winner_pubkey,
+            prize,
+            winner_amount,
+            growing_pot,
+            operator_cut,
+            ops_cut
+        );
+        Ok(())
+    }
+
+    /// Winner pulls their 65%. The prize was held in usdc_vault since settle.
+    pub fn claim_draw(ctx: Context<ClaimDraw>, _round: u64) -> Result<()> {
+        let pool_config = &ctx.accounts.pool_config;
+        let draw = &ctx.accounts.draw;
+        let amount = draw.winner_amount;
+        require!(amount > 0, StewfiError::NothingToDraw);
+
+        let mint_key = pool_config.usdc_mint;
+        let bump = pool_config.bump;
+        let pool_config_seeds: &[&[u8]] = &[b"pool_config", mint_key.as_ref(), &[bump]];
+        let signer_seeds: &[&[&[u8]]] = &[pool_config_seeds];
+
+        let cpi_accounts = Transfer {
+            from: ctx.accounts.usdc_vault.to_account_info(),
+            to: ctx.accounts.winner_usdc.to_account_info(),
+            authority: ctx.accounts.pool_config.to_account_info(),
+        };
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            cpi_accounts,
+            signer_seeds,
+        );
+        token::transfer(cpi_ctx, amount)?;
+
+        let draw = &mut ctx.accounts.draw;
+        draw.winner_claimed = true;
+        draw.status = DrawStatus::Claimed;
+
+        let pool_config = &mut ctx.accounts.pool_config;
+        pool_config.pending_winnings = pool_config.pending_winnings.saturating_sub(amount);
+
+        msg!(
+            "Winner {} claimed {} USDC from round {}",
+            ctx.accounts.winner.key(),
+            amount,
+            draw.round
+        );
+        Ok(())
+    }
+
+    /// Admin escape hatch if the oracle never reveals: unlock deposits and reset
+    /// the current round back to Pending so a fresh randomness account can be
+    /// committed. No funds move (nothing was distributed yet).
+    pub fn cancel_draw(ctx: Context<CancelDraw>) -> Result<()> {
+        let pool_config = &ctx.accounts.pool_config;
+        require!(
+            ctx.accounts.admin.key() == pool_config.admin,
+            StewfiError::Unauthorized
+        );
+        require!(pool_config.draw_in_progress, StewfiError::InvalidDrawStatus);
+
+        let draw = &mut ctx.accounts.current_draw;
+        require!(
+            draw.status == DrawStatus::Committed,
+            StewfiError::InvalidDrawStatus
+        );
+        draw.status = DrawStatus::Pending;
+        draw.randomness_account = Pubkey::default();
+        draw.draw_ts = 0;
+        draw.total_weight = 0;
+        draw.prize_pool = 0;
+
+        let pool_config = &mut ctx.accounts.pool_config;
+        pool_config.draw_in_progress = false;
+
+        msg!("Draw cancelled for round {}", ctx.accounts.current_draw.round);
+        Ok(())
+    }
+}
+
+// =============================================================================
+// M4 — internal helpers
+// =============================================================================
+
+/// `value * bps / 10_000` with checked arithmetic.
+fn mul_div_bps(value: u64, bps: u64) -> Result<u64> {
+    value
+        .checked_mul(bps)
+        .ok_or(StewfiError::Overflow)?
+        .checked_div(BPS_DENOMINATOR)
+        .ok_or(StewfiError::Overflow.into())
+}
+
+/// PDA-signed `token::transfer` from the pool's usdc_vault to a destination.
+/// Skips the CPI when `amount == 0` (avoids a no-op CPI / possible zero-transfer
+/// quirks). authority is the pool_config PDA. Takes `AccountInfo`s so callers can
+/// pass Box<Account<..>> fields (boxed to keep the SettleDraw stack frame small).
+fn transfer_from_vault<'info>(
+    token_program: &Program<'info, Token>,
+    from: AccountInfo<'info>,
+    to: AccountInfo<'info>,
+    authority: AccountInfo<'info>,
+    signer_seeds: &[&[&[u8]]],
+    amount: u64,
+) -> Result<()> {
+    if amount == 0 {
+        return Ok(());
+    }
+    let cpi_accounts = Transfer {
+        from,
+        to,
+        authority,
+    };
+    let cpi_ctx =
+        CpiContext::new_with_signer(token_program.to_account_info(), cpi_accounts, signer_seeds);
+    token::transfer(cpi_ctx, amount)
 }
 
 // =============================================================================
@@ -635,8 +1288,10 @@ pub struct Initialize<'info> {
 
 #[derive(Accounts)]
 pub struct Deposit<'info> {
-    /// PoolConfig — read-only here (we check `paused`, `usdc_mint`).
+    /// PoolConfig — mutable: deposit maintains the M4 principal + weight
+    /// accumulators (total_principal, sum_amount, sum_amount_first_ts).
     #[account(
+        mut,
         seeds = [b"pool_config", pool_config.usdc_mint.as_ref()],
         bump = pool_config.bump,
     )]
@@ -693,7 +1348,10 @@ pub struct RequestWithdraw<'info> {
 
 #[derive(Accounts)]
 pub struct Withdraw<'info> {
+    /// PoolConfig — mutable: withdraw maintains the M4 principal + weight
+    /// accumulators (subtracts the closed position's full contribution).
     #[account(
+        mut,
         seeds = [b"pool_config", pool_config.usdc_mint.as_ref()],
         bump = pool_config.bump,
     )]
@@ -966,6 +1624,271 @@ pub struct WithdrawFromKamino<'info> {
     pub klend_program: Program<'info, KaminoLending>,
 }
 
+// -----------------------------------------------------------------------------
+// M4 — Draw account contexts
+// -----------------------------------------------------------------------------
+
+#[derive(Accounts)]
+pub struct SetPaused<'info> {
+    #[account(
+        mut,
+        seeds = [b"pool_config", pool_config.usdc_mint.as_ref()],
+        bump = pool_config.bump,
+    )]
+    pub pool_config: Account<'info, PoolConfig>,
+
+    pub admin: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct InitDrawAccounts<'info> {
+    #[account(
+        mut,
+        seeds = [b"pool_config", pool_config.usdc_mint.as_ref()],
+        bump = pool_config.bump,
+    )]
+    pub pool_config: Account<'info, PoolConfig>,
+
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    /// USDC mint (must match the pool's). Used to seed the vault PDAs.
+    #[account(address = pool_config.usdc_mint @ StewfiError::WrongMint)]
+    pub usdc_mint: Box<Account<'info, Mint>>,
+
+    /// Round-0 Draw — the steady state that accepts deposits until triggered.
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + Draw::INIT_SPACE,
+        seeds = [b"draw", 0u64.to_le_bytes().as_ref()],
+        bump,
+    )]
+    pub current_draw: Box<Account<'info, Draw>>,
+
+    /// 20% Growing-Pot escrow (M5 sweeps). PDA-owned USDC account.
+    #[account(
+        init,
+        payer = admin,
+        seeds = [b"growing_pot_vault", usdc_mint.key().as_ref()],
+        bump,
+        token::mint = usdc_mint,
+        token::authority = pool_config,
+    )]
+    pub growing_pot_vault: Box<Account<'info, TokenAccount>>,
+
+    /// 10% operator escrow. PDA-owned USDC account.
+    #[account(
+        init,
+        payer = admin,
+        seeds = [b"operator_vault", usdc_mint.key().as_ref()],
+        bump,
+        token::mint = usdc_mint,
+        token::authority = pool_config,
+    )]
+    pub operator_vault: Box<Account<'info, TokenAccount>>,
+
+    /// 5% ops escrow. PDA-owned USDC account.
+    #[account(
+        init,
+        payer = admin,
+        seeds = [b"ops_vault", usdc_mint.key().as_ref()],
+        bump,
+        token::mint = usdc_mint,
+        token::authority = pool_config,
+    )]
+    pub ops_vault: Box<Account<'info, TokenAccount>>,
+
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+#[derive(Accounts)]
+pub struct TriggerDraw<'info> {
+    /// Operator or admin (checked in the handler).
+    pub crank: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"pool_config", pool_config.usdc_mint.as_ref()],
+        bump = pool_config.bump,
+    )]
+    pub pool_config: Account<'info, PoolConfig>,
+
+    /// Current round's Draw (must be Pending).
+    #[account(
+        mut,
+        seeds = [b"draw", pool_config.current_round.to_le_bytes().as_ref()],
+        bump = current_draw.bump,
+    )]
+    pub current_draw: Account<'info, Draw>,
+
+    /// The pool's USDC vault — read for the prize snapshot.
+    #[account(
+        seeds = [b"usdc_vault", pool_config.usdc_mint.as_ref()],
+        bump = pool_config.usdc_vault_bump,
+    )]
+    pub usdc_vault: Account<'info, TokenAccount>,
+
+    /// The Switchboard randomness account (committed off-chain in the same tx).
+    /// CHECK: parsed via RandomnessAccountData; owner + un-revealed verified.
+    pub randomness_account: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
+pub struct SettleDraw<'info> {
+    /// Operator or admin (checked in the handler).
+    #[account(mut)]
+    pub crank: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"pool_config", pool_config.usdc_mint.as_ref()],
+        bump = pool_config.bump,
+    )]
+    pub pool_config: Box<Account<'info, PoolConfig>>,
+
+    /// Current round's Draw (must be Committed).
+    #[account(
+        mut,
+        seeds = [b"draw", pool_config.current_round.to_le_bytes().as_ref()],
+        bump = current_draw.bump,
+    )]
+    pub current_draw: Box<Account<'info, Draw>>,
+
+    /// Next round's Draw, created here (Pending).
+    #[account(
+        init,
+        payer = crank,
+        space = 8 + Draw::INIT_SPACE,
+        seeds = [
+            b"draw",
+            pool_config
+                .current_round
+                .checked_add(1)
+                .ok_or(StewfiError::Overflow)?
+                .to_le_bytes()
+                .as_ref()
+        ],
+        bump,
+    )]
+    pub next_draw: Box<Account<'info, Draw>>,
+
+    /// The committed randomness account (key checked == current_draw.randomness_account).
+    /// CHECK: parsed via RandomnessAccountData; value read slot-bound.
+    pub randomness_account: UncheckedAccount<'info>,
+
+    /// The winner position. Anchor verifies it's a real UserPosition at its
+    /// canonical PDA. The handler does NOT trust this is the winner — it derives
+    /// the winner on-chain by iterating ALL live positions (passed via
+    /// remaining_accounts, ascending by `user`) and requires this account ==
+    /// the derived winner. Used here so the prize-split + Draw.winner record can
+    /// reference the winner's wallet directly. See settle_draw.
+    ///
+    /// remaining_accounts (NOT in this struct): every live `UserPosition` for the
+    /// pool, ordered ascending by `user` pubkey. Required for the trustless
+    /// winner derivation + completeness check.
+    #[account(
+        seeds = [b"user_position", winner_position.user.as_ref()],
+        bump = winner_position.bump,
+    )]
+    pub winner_position: Box<Account<'info, UserPosition>>,
+
+    /// The pot (winner's 65% stays here; 20/10/5 leave here).
+    #[account(
+        mut,
+        seeds = [b"usdc_vault", pool_config.usdc_mint.as_ref()],
+        bump = pool_config.usdc_vault_bump,
+    )]
+    pub usdc_vault: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        seeds = [b"growing_pot_vault", pool_config.usdc_mint.as_ref()],
+        bump = pool_config.growing_pot_vault_bump,
+    )]
+    pub growing_pot_vault: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        seeds = [b"operator_vault", pool_config.usdc_mint.as_ref()],
+        bump = pool_config.operator_vault_bump,
+    )]
+    pub operator_vault: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        seeds = [b"ops_vault", pool_config.usdc_mint.as_ref()],
+        bump = pool_config.ops_vault_bump,
+    )]
+    pub ops_vault: Box<Account<'info, TokenAccount>>,
+
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(round: u64)]
+pub struct ClaimDraw<'info> {
+    #[account(mut)]
+    pub winner: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"pool_config", pool_config.usdc_mint.as_ref()],
+        bump = pool_config.bump,
+    )]
+    pub pool_config: Box<Account<'info, PoolConfig>>,
+
+    /// The won round's Draw — must be Settled, winner matches, not yet claimed.
+    #[account(
+        mut,
+        seeds = [b"draw", round.to_le_bytes().as_ref()],
+        bump = draw.bump,
+        constraint = draw.status == DrawStatus::Settled @ StewfiError::InvalidDrawStatus,
+        constraint = draw.winner == winner.key() @ StewfiError::BadWinnerProof,
+        constraint = !draw.winner_claimed @ StewfiError::InvalidDrawStatus,
+    )]
+    pub draw: Box<Account<'info, Draw>>,
+
+    #[account(
+        mut,
+        seeds = [b"usdc_vault", pool_config.usdc_mint.as_ref()],
+        bump = pool_config.usdc_vault_bump,
+    )]
+    pub usdc_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Winner's USDC token account.
+    #[account(
+        mut,
+        constraint = winner_usdc.mint == pool_config.usdc_mint @ StewfiError::WrongMint,
+        constraint = winner_usdc.owner == winner.key() @ StewfiError::WrongOwner,
+    )]
+    pub winner_usdc: Box<Account<'info, TokenAccount>>,
+
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct CancelDraw<'info> {
+    pub admin: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"pool_config", pool_config.usdc_mint.as_ref()],
+        bump = pool_config.bump,
+    )]
+    pub pool_config: Account<'info, PoolConfig>,
+
+    #[account(
+        mut,
+        seeds = [b"draw", pool_config.current_round.to_le_bytes().as_ref()],
+        bump = current_draw.bump,
+    )]
+    pub current_draw: Account<'info, Draw>,
+}
+
 // =============================================================================
 // State accounts
 // =============================================================================
@@ -983,10 +1906,41 @@ pub struct PoolConfig {
     // ---- M3 (Kamino) ----
     /// The pool's klend obligation. Pubkey::default() until init_kamino_obligation.
     pub kamino_obligation: Pubkey,
-    /// Running principal deployed into Kamino (best-effort; refined in M4).
+    /// Running principal deployed into Kamino (best-effort; deploy hint only).
     pub kamino_deposited: u64,
     /// Unix ts of the last deposit_to_kamino / withdraw_from_kamino crank.
     pub last_kamino_sync: i64,
+    // ---- M4 (Draw) ----
+    /// Exact sum of all live UserPosition.amount. Maintained in deposit (+) /
+    /// withdraw (−). Authoritative principal for the prize formula
+    /// (prize = usdc_vault − total_principal − pending_winnings).
+    pub total_principal: u64,
+    /// Trustless-winner accumulator S1 = Σ live position.amount (u128).
+    pub sum_amount: u128,
+    /// Trustless-winner accumulator S2 = Σ (position.amount × first_deposit_ts) (u128).
+    /// total_weight at a draw = draw_ts × sum_amount − sum_amount_first_ts.
+    pub sum_amount_first_ts: u128,
+    /// Sum of settled-but-unclaimed winner prizes still sitting in usdc_vault.
+    /// Excluded from the prize so a pending prize isn't re-drawn as "yield".
+    pub pending_winnings: u64,
+    /// True between trigger_draw (commit) and settle_draw/cancel_draw. Blocks
+    /// deposit/withdraw so the weight set can't shift mid-draw.
+    pub draw_in_progress: bool,
+    /// Operator payout wallet (receives 10% via operator_vault sweep). Also the
+    /// non-admin signer allowed to trigger/settle draws.
+    pub operator: Pubkey,
+    /// Ops payout wallet (receives 5% via ops_vault sweep).
+    pub ops: Pubkey,
+    /// Seconds between draws (set to DRAW_INTERVAL at init; weekly).
+    pub draw_interval: i64,
+    /// Earliest unix ts the next draw may be triggered.
+    pub next_draw_ts: i64,
+    /// True once init_draw_accounts has run (vaults + round-0 Draw exist).
+    pub draw_accounts_ready: bool,
+    /// Stored bumps for the M4 PDA vaults.
+    pub growing_pot_vault_bump: u8,
+    pub operator_vault_bump: u8,
+    pub ops_vault_bump: u8,
 }
 
 #[account]
@@ -1004,6 +1958,52 @@ pub struct UserPosition {
     pub withdraw_requested_at: i64,
     /// Stored bump for cheap re-derivation.
     pub bump: u8,
+}
+
+/// Per-round draw state (PDA `[b"draw", round.to_le_bytes()]`).
+#[account]
+#[derive(InitSpace)]
+pub struct Draw {
+    /// Which round this draw represents.
+    pub round: u64,
+    /// State-machine position.
+    pub status: DrawStatus,
+    /// Switchboard randomness account committed for this round (default until commit).
+    pub randomness_account: Pubkey,
+    /// Timestamp pinned at commit; used for the winner's seconds_held at settle.
+    pub draw_ts: i64,
+    /// Global total weight snapshotted at commit (on-chain, trustless).
+    pub total_weight: u128,
+    /// Prize (USDC) snapshotted at commit = vault − principal − pending_winnings.
+    pub prize_pool: u64,
+    /// The 32 revealed VRF bytes (zero until settle).
+    pub random_value: [u8; 32],
+    /// Winner wallet (default until settle).
+    pub winner: Pubkey,
+    /// Winner's 65% (+ dust), held in usdc_vault until claim_draw.
+    pub winner_amount: u64,
+    /// 20% routed to growing_pot_vault at settle.
+    pub growing_pot_amount: u64,
+    /// 10% routed to operator_vault at settle.
+    pub operator_amount: u64,
+    /// 5% routed to ops_vault at settle.
+    pub ops_amount: u64,
+    /// Whether the winner has claimed their prize.
+    pub winner_claimed: bool,
+    /// PDA bump.
+    pub bump: u8,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace)]
+pub enum DrawStatus {
+    /// Draw account exists for this round, accepting deposits (steady state).
+    Pending,
+    /// Randomness committed; awaiting the oracle reveal (off-chain).
+    Committed,
+    /// Winner picked + 20/10/5 distributed; 65% awaiting winner claim.
+    Settled,
+    /// Winner has claimed — terminal.
+    Claimed,
 }
 
 // =============================================================================
@@ -1045,4 +2045,35 @@ pub enum StewfiError {
     InvalidAmount,
     #[msg("USDC vault balance is insufficient for this deposit")]
     InsufficientVaultBalance,
+    // ---- M4 (Draw) ----
+    #[msg("A draw is in progress — deposits/withdrawals are locked")]
+    DrawInProgress,
+    #[msg("Draw accounts have already been initialized")]
+    DrawAccountsAlreadyInit,
+    #[msg("Draw accounts have not been initialized yet")]
+    DrawAccountsNotInit,
+    #[msg("It is not yet time for the next draw")]
+    DrawNotReady,
+    #[msg("Draw is not in the expected state for this action")]
+    InvalidDrawStatus,
+    #[msg("No eligible entries (total weight is zero)")]
+    NoEntries,
+    #[msg("Funds are still in Kamino — harvest into the vault before drawing")]
+    FundsStillInKamino,
+    #[msg("No prize to draw (vault has no yield over principal)")]
+    NothingToDraw,
+    #[msg("Randomness account is invalid or not a Switchboard On-Demand account")]
+    InvalidRandomnessAccount,
+    #[msg("Randomness account has already been revealed (single-use)")]
+    RandomnessAlreadyRevealed,
+    #[msg("Randomness has not been revealed for the current slot")]
+    RandomnessNotResolved,
+    #[msg("Winner proof failed: the claimed winner does not match the VRF result")]
+    BadWinnerProof,
+    #[msg("A passed position account is not a valid UserPosition for this pool")]
+    BadPositionAccount,
+    #[msg("Positions must be passed in strictly ascending order by user pubkey")]
+    PositionsNotSorted,
+    #[msg("Passed position set is incomplete: summed weight != snapshot total_weight")]
+    IncompletePositionSet,
 }

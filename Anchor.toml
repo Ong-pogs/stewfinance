@@ -16,7 +16,12 @@ cluster = "localnet"
 wallet = "~/.config/solana/stewfi-dev.json"
 
 # Default `anchor test` runs ONLY the local-validator suite (M1/M2).
-# The Kamino E2E (tests/kamino.ts) is surfpool-only — run it with `yarn test:kamino`
-# against a running surfpool fork (it needs the real klend reserves + Scope oracle).
+# Surfpool-only suites are kept OUT of this glob and run separately against a
+# running surfpool instance (M3 lesson — they need cheatcodes / forked state):
+#   - tests/kamino.ts (M3): `yarn test:kamino`  — surfpool fork of MAINNET
+#       (needs the real klend USDC reserve + Scope oracle)
+#   - tests/draw.ts   (M4): `yarn test:draw`    — surfpool OFFLINE simnet
+#       (mocks the Switchboard randomness account via surfnet_setAccount;
+#        pauses the clock for get_value slot-binding)
 [scripts]
 test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/stewfi.ts"

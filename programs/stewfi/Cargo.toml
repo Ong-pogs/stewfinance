@@ -21,4 +21,5 @@ idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 anchor-lang = { version = "0.31.1", features = ["init-if-needed"] }
 anchor-spl = "0.31.1"
 kamino-lend = "0.4.1"
+switchboard-on-demand = { version = "0.12.1", features = ["anchor"] }
 
