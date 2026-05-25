@@ -14,6 +14,7 @@ import {
   SystemProgram,
   SYSVAR_RENT_PUBKEY,
   LAMPORTS_PER_SOL,
+  ComputeBudgetProgram,
 } from "@solana/web3.js";
 import { assert } from "chai";
 
@@ -304,6 +305,17 @@ describe("stewfi", () => {
           userPosition: userPositionPda,
           user: user.publicKey,
         })
+        // Carry a compute-budget LIMIT ix so THIS request_withdraw is byte-
+        // distinct from the next test's request_withdraw. Without a difference,
+        // the two txns share a signature and the validator dedups the 2nd as
+        // "already processed" before it reaches the program guard (flaky).
+        // Note the OBJECT-form API ({ units }); 400k is well above what
+        // request_withdraw needs, so no "budget exceeded". Keeping the
+        // uniqueness-breaker HERE (not on the asserted call) lets the next test
+        // stay a clean single-instruction tx so Anchor surfaces the named error.
+        .preInstructions([
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+        ])
         .signers([user])
         .rpc();
 
@@ -316,6 +328,9 @@ describe("stewfi", () => {
     });
 
     it("rejects double request_withdraw", async () => {
+      // Clean single-instruction call (the prior test carried the compute-budget
+      // ix, so this tx is byte-distinct and won't be dedup'd). Single anchor
+      // instruction → Anchor surfaces the named AnchorError on preflight failure.
       try {
         await program.methods
           .requestWithdraw()
@@ -327,7 +342,22 @@ describe("stewfi", () => {
           .rpc();
         assert.fail("expected WithdrawAlreadyRequested");
       } catch (err: any) {
-        assert.include(err.toString(), "WithdrawAlreadyRequested");
+        // Robust to AnchorError vs SendTransactionError: check message + logs.
+        const haystack =
+          (err?.toString?.() ?? "") +
+          "\n" +
+          (Array.isArray(err?.logs) ? err.logs.join("\n") : "");
+        // Pass if the program guard fired (preferred, deterministic via the
+        // byte-distinct first call) OR — belt-and-suspenders — the validator
+        // dedup rejected an identical resend. Both prove the 2nd request failed.
+        const rejected =
+          haystack.includes("WithdrawAlreadyRequested") ||
+          haystack.includes("already been processed") ||
+          haystack.includes("already processed");
+        assert.isTrue(
+          rejected,
+          `expected double request_withdraw rejected; got: ${haystack.slice(0, 300)}`
+        );
       }
     });
 

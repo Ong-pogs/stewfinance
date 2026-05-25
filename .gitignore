@@ -9,6 +9,9 @@ test-ledger
 # Internal build-tracking / superstack workspace state
 .superstack/
 
+# Local-only Claude bridge to the stewfinance brain vault — never commit
+CLAUDE.local.md
+
 # Local keypairs — never commit
 *-keypair.json
 co-signer-keypair.json
