@@ -19,9 +19,11 @@ import {
   Keypair,
   Signer,
   SYSVAR_INSTRUCTIONS_PUBKEY,
+  AccountMeta,
+  VersionedTransaction,
 } from "@solana/web3.js";
 import { getAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { Program, BN } from "@coral-xyz/anchor";
+import { AnchorProvider, Program, BN } from "@coral-xyz/anchor";
 import { Stewfi } from "../../target/types/stewfi";
 
 import {
@@ -39,11 +41,14 @@ import {
   DRAW_TIMEOUT_SECS,
   SETTLE_LEGACY_POSITION_CAP,
   KLEND_COMPUTE_UNIT_LIMIT,
+  SWITCHBOARD_DEFAULT_QUEUE_MAINNET,
 } from "./constants";
 import {
   poolConfigPda,
   usdcVaultPda,
   growingPotVaultPda,
+  operatorVaultPda,
+  opsVaultPda,
   drawPda,
   obligationFarmPda,
 } from "./pdas";
@@ -61,12 +66,21 @@ import {
   PositionEntry,
   WinnerWindow,
 } from "./positions";
+import {
+  buildCommitAndTriggerV0Tx,
+  buildRevealAndSettleV0Tx,
+  CommitAndTriggerOpts,
+  RevealAndSettleOpts,
+  mockRandomness,
+  vrfValueForTicket,
+} from "./vrf";
 
 // Re-export the sub-modules so callers can `import { ... } from "app/crank"`.
 export * from "./constants";
 export * from "./pdas";
 export * from "./klend";
 export * from "./positions";
+export * from "./vrf";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -592,3 +606,680 @@ export async function computeSettleWinner(
 
 // Type re-exports for ergonomic imports.
 export type { PositionEntry, WinnerWindow };
+
+// ===========================================================================
+// Slice 2a — operator-gated draw txs + full-cycle orchestrator
+// ===========================================================================
+
+/**
+ * Send a v0 tx via the provider's signer (the SDK gives us a VersionedTransaction
+ * that's already signed by the explicit signers we passed; we need ALSO the
+ * provider wallet's signature when it's the fee-payer — which is NOT the case
+ * here, the operator IS the fee-payer — so we send raw).
+ *
+ * IMPORTANT: skipPreflight=true means an on-chain revert (e.g. Unauthorized,
+ * BadWinnerProof) is NOT caught by preflight — the tx lands and confirms with
+ * `value.err` set. `confirmTransaction` does NOT throw on err. We must check
+ * the err manually and re-throw with the program logs so the AnchorError name
+ * surfaces in the thrown message (buglog B1). Without this, a revert looks
+ * indistinguishable from a successful tx to callers.
+ */
+async function sendV0(
+  provider: AnchorProvider,
+  tx: VersionedTransaction
+): Promise<string> {
+  const raw = tx.serialize();
+  const sig = await provider.connection.sendRawTransaction(raw, {
+    skipPreflight: true,
+  });
+  // Honor the provider's commitment (Anchor default = "processed"), matching
+  // the working .rpc() path in tests/draw.ts. Hardcoding "confirmed" hangs
+  // during surfpool pauseClock (block production slows → multi-validator
+  // ack misses the 30s confirmTransaction window). See buglog B7.
+  const commitment = provider.opts.commitment ?? "processed";
+  const conf = await provider.connection.confirmTransaction(sig, commitment);
+  if (conf.value.err) {
+    // Try to fetch logs so the AnchorError name surfaces. Best-effort —
+    // surfpool can lag on getTransaction; the err object is the fallback.
+    let logs = "";
+    try {
+      // Use "confirmed" for the log fetch (NOT the provider's possibly-
+      // "processed" commitment) — at processed, surfpool often returns null
+      // for getTransaction so the AnchorError name never surfaces. The extra
+      // 1–2s wait only fires on the error path. See buglog B7.
+      const txDetails = await provider.connection.getTransaction(sig, {
+        commitment: "confirmed",
+        maxSupportedTransactionVersion: 0,
+      });
+      if (txDetails?.meta?.logMessages) {
+        logs = "\n" + txDetails.meta.logMessages.join("\n");
+      }
+    } catch {
+      /* ignore */
+    }
+    const err: any = new Error(
+      `tx ${sig} failed on-chain: ${JSON.stringify(conf.value.err)}${logs}`
+    );
+    err.logs = logs ? logs.trim().split("\n") : undefined;
+    throw err;
+  }
+  return sig;
+}
+
+// ---------------------------------------------------------------------------
+// triggerDraw — operator-gated. Bundles SB commitIx + StewFi trigger_draw.
+// ---------------------------------------------------------------------------
+
+export interface TriggerDrawResult {
+  round: bigint;
+  drawPda: PublicKey;
+  randomnessAccount: PublicKey;
+  sig: string;
+}
+
+/**
+ * Operator-gated. Builds the StewFi `trigger_draw` ix (accounts per
+ * tests/draw.ts), bundles it with the Switchboard `commitIx` via
+ * `buildCommitAndTriggerV0Tx` (atomic v0), sends with `operatorKp` as
+ * fee-payer + crank.
+ *
+ * On surfpool, pass `opts.skipCommit = true` AND ensure the rng account is
+ * pre-mocked (owner = SB On-Demand PID, reveal_slot = 0) via `mockRandomness`.
+ * The on-chain trigger_draw only checks owner + reveal_slot==0; no SB queue
+ * read is needed in that mode.
+ *
+ * Pre-conditions (the on-chain `trigger_draw` enforces them — we don't try to
+ * pre-check here, but `runDrawCycle` does):
+ *   - not paused, draw_accounts_ready, not draw_in_progress
+ *   - clock.unix_timestamp >= pool_config.next_draw_ts
+ *   - operator == pool_config.operator || pool_config.admin
+ *   - vault.amount >= total_principal + pending_winnings (prize > 0) — i.e. the
+ *     main pool must be FULLY harvested out of klend before this.
+ *
+ * Caller MUST persist `randomnessAccount` (== rngKp.publicKey) across to settle.
+ */
+export async function triggerDraw(
+  program: Program<Stewfi>,
+  operatorKp: Signer,
+  randomness: any /* SDK Randomness instance or {pubkey: PublicKey} */,
+  queue: PublicKey = SWITCHBOARD_DEFAULT_QUEUE_MAINNET,
+  opts: CommitAndTriggerOpts = {},
+  mint: PublicKey = USDC_MINT
+): Promise<TriggerDrawResult> {
+  const provider = program.provider as AnchorProvider;
+  const pc = poolConfigPda(mint, program.programId);
+  const cfg = await program.account.poolConfig.fetch(pc);
+  const round = BigInt(cfg.currentRound.toString());
+  const draw = drawPda(round.toString(), program.programId);
+  const usdcVault = usdcVaultPda(mint, program.programId);
+  const randomnessAccount: PublicKey = randomness.pubkey;
+
+  const triggerIx = await program.methods
+    .triggerDraw()
+    .accountsPartial({
+      crank: operatorKp.publicKey,
+      poolConfig: pc,
+      currentDraw: draw,
+      usdcVault,
+      randomnessAccount,
+    })
+    .instruction();
+
+  const tx = await buildCommitAndTriggerV0Tx(
+    provider,
+    randomness,
+    queue,
+    triggerIx,
+    operatorKp,
+    opts
+  );
+  const sig = await sendV0(provider, tx);
+  return { round, drawPda: draw, randomnessAccount, sig };
+}
+
+// ---------------------------------------------------------------------------
+// revealAndSettle — operator-gated. Bundles SB revealIx + StewFi settle_draw.
+// ---------------------------------------------------------------------------
+
+export interface SettlePositionPlan {
+  /** Sorted ascending-by-owner remaining_accounts metas (settle_draw input). */
+  metas: AccountMeta[];
+  /** The crank-derived winner position PDA — MUST match on-chain derivation. */
+  winnerPositionPda: PublicKey;
+  /** The crank-derived winner owner pubkey. */
+  winnerOwner: PublicKey;
+}
+
+export interface RevealAndSettleResult {
+  round: bigint;
+  /** Winner pubkey from the on-chain Draw record (post-settle). */
+  winner: PublicKey;
+  prize: bigint;
+  winnerAmount: bigint;
+  growingPotAmount: bigint;
+  operatorAmount: bigint;
+  opsAmount: bigint;
+  sig: string;
+}
+
+/**
+ * Operator-gated. Atomic with the SB reveal (production) or against a
+ * mocked-revealed randomness account (surfpool, `opts.skipReveal = true`).
+ *
+ * `positionPlan` is the FULL sorted set of live position metas + the
+ * crank-named winner_position. The on-chain settle re-derives the winner over
+ * the SAME set and rejects any mismatch — so the plan MUST be built from
+ * `fetchAllPositions` + `computeWinner` using the REVEALED value at the
+ * on-chain `draw.draw_ts` and `draw.total_weight`.
+ *
+ * Retries ±slots on `RandomnessNotResolved` (the slot the tx LANDS in can
+ * differ from the slot the crank read by ±1-3 on surfpool; the on-chain
+ * `get_value(clock.slot)` is strict). Each retry re-mocks the randomness
+ * account at the candidate slot — but we don't do the re-mocking here; it's
+ * the caller's responsibility (see `runDrawCycle` on surfpool). For the live
+ * path with `skipReveal=false`, the SB `revealIx` sets `reveal_slot = current
+ * slot` itself, so the same-tx bundling makes the match automatic — no retry
+ * loop needed.
+ *
+ * If you want the retry-on-RandomnessNotResolved behavior the surfpool tests
+ * exercise (where the mocked slot has to match the tx's observed slot), pass
+ * an explicit `opts.remockOnRetry` callback that re-writes the mock at the
+ * suggested candidate slot before each retry.
+ */
+export async function revealAndSettle(
+  program: Program<Stewfi>,
+  operatorKp: Signer,
+  round: number | bigint,
+  randomness: any /* SDK Randomness instance */,
+  positionPlan: SettlePositionPlan,
+  opts: RevealAndSettleOpts & {
+    /** SURFPOOL ONLY: re-write the mock at the given slot between retries. */
+    remockOnRetry?: (candidateSlot: number) => Promise<void>;
+    /** Override how many slot offsets the retry walks (default 6). */
+    maxRetries?: number;
+  } = {},
+  mint: PublicKey = USDC_MINT
+): Promise<RevealAndSettleResult> {
+  const provider = program.provider as AnchorProvider;
+  const pc = poolConfigPda(mint, program.programId);
+  const roundBn = new BN(round.toString());
+  const currentDraw = drawPda(roundBn, program.programId);
+  const nextDraw = drawPda(roundBn.add(new BN(1)), program.programId);
+  const usdcVault = usdcVaultPda(mint, program.programId);
+  const growingPotVault = growingPotVaultPda(mint, program.programId);
+  const operatorVault = operatorVaultPda(mint, program.programId);
+  const opsVault = opsVaultPda(mint, program.programId);
+  const randomnessAccount: PublicKey = randomness.pubkey;
+
+  const buildSettleIx = async () =>
+    program.methods
+      .settleDraw()
+      .accountsPartial({
+        crank: operatorKp.publicKey,
+        poolConfig: pc,
+        currentDraw,
+        nextDraw,
+        randomnessAccount,
+        winnerPosition: positionPlan.winnerPositionPda,
+        usdcVault,
+        growingPotVault,
+        operatorVault,
+        opsVault,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .remainingAccounts(positionPlan.metas)
+      .instruction();
+
+  const maxRetries = opts.maxRetries ?? 6;
+  const offsets = [0, +1, -1, +2, -2, +3, -3];
+  let lastErr: any = undefined;
+
+  for (let i = 0; i < Math.min(maxRetries, offsets.length); i++) {
+    // For the surfpool remock path: derive the candidate slot from the chain's
+    // current clock-sysvar slot. The caller's `remockOnRetry` handles the actual
+    // rewrite.
+    if (opts.remockOnRetry) {
+      const slot = await getClockSysvarSlot(provider.connection);
+      await opts.remockOnRetry(slot + offsets[i]);
+    }
+
+    const settleIx = await buildSettleIx();
+    const tx = await buildRevealAndSettleV0Tx(
+      provider,
+      randomness,
+      settleIx,
+      operatorKp,
+      { skipReveal: opts.skipReveal, computeUnits: opts.computeUnits }
+    );
+    try {
+      const sig = await sendV0(provider, tx);
+      // Success — read the settled outcome.
+      const d = await program.account.draw.fetch(currentDraw);
+      return {
+        round: BigInt(d.round.toString()),
+        winner: d.winner as PublicKey,
+        prize: BigInt(d.prizePool.toString()),
+        winnerAmount: BigInt(d.winnerAmount.toString()),
+        growingPotAmount: BigInt(d.growingPotAmount.toString()),
+        operatorAmount: BigInt(d.operatorAmount.toString()),
+        opsAmount: BigInt(d.opsAmount.toString()),
+        sig,
+      };
+    } catch (err: any) {
+      lastErr = err;
+      const msg = err?.toString?.() ?? "";
+      // Only retry on RandomnessNotResolved (the slot-binding miss). Anything
+      // else — BadWinnerProof, PositionsNotSorted, IncompletePositionSet, klend
+      // / token errors — is a real failure; surface it.
+      if (!msg.includes("RandomnessNotResolved")) throw err;
+    }
+  }
+  throw lastErr;
+}
+
+// ---------------------------------------------------------------------------
+// claimDraw — winner-signed claim tx (cheap; included for completeness).
+// ---------------------------------------------------------------------------
+
+export interface ClaimResult {
+  round: bigint;
+  amount: bigint;
+  sig: string;
+}
+
+/**
+ * Winner-signed. Pulls the winner's 65% from `usdc_vault` to their USDC ATA.
+ * `winnerKp` must equal `draw.winner` for the given round.
+ *
+ * `winnerUsdc` defaults to the winner's USDC ATA (computed via SPL ATA helper —
+ * the on-chain claim_draw enforces `winner_usdc.owner == winner`).
+ */
+export async function claimDraw(
+  program: Program<Stewfi>,
+  winnerKp: Signer,
+  round: number | bigint,
+  winnerUsdc: PublicKey,
+  mint: PublicKey = USDC_MINT
+): Promise<ClaimResult> {
+  const pc = poolConfigPda(mint, program.programId);
+  const usdcVault = usdcVaultPda(mint, program.programId);
+  const roundBn = new BN(round.toString());
+  const draw = drawPda(roundBn, program.programId);
+
+  const sig = await program.methods
+    .claimDraw(roundBn)
+    .accountsPartial({
+      winner: winnerKp.publicKey,
+      poolConfig: pc,
+      draw,
+      usdcVault,
+      winnerUsdc,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    })
+    .signers([winnerKp as Keypair])
+    .rpc({ skipPreflight: true });
+
+  const d = await program.account.draw.fetch(draw);
+  return {
+    round: BigInt(d.round.toString()),
+    amount: BigInt(d.winnerAmount.toString()),
+    sig,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// withdrawMainFromKamino — operator helper for the orchestrator's pre-trigger
+// full redeem of the main pool's klend position. NOT defensive: assumes the
+// obligation has been deposited into (kamino_deposited > 0); on a freshly-
+// initialized obligation with no collateral the caller should skip this.
+// ---------------------------------------------------------------------------
+
+export interface MainPoolWithdrawResult {
+  skipped?: string;
+  collateral?: bigint;
+  sig?: string;
+}
+
+/**
+ * Withdraw the FULL main-pool position from klend back into usdc_vault. This
+ * is the operator's pre-trigger step: trigger_draw's
+ * `vault.amount >= total_principal + pending_winnings` guard will fail with
+ * `FundsStillInKamino` if any principal is still in klend.
+ *
+ * Returns `{skipped}` if the main obligation holds no collateral. Reads the
+ * full cToken balance via `readObligationCollateral` and withdraws it.
+ */
+export async function withdrawMainFromKamino(
+  program: Program<Stewfi>,
+  operatorKp: Signer,
+  mint: PublicKey = USDC_MINT
+): Promise<MainPoolWithdrawResult> {
+  const connection = program.provider.connection;
+  const pc = poolConfigPda(mint, program.programId);
+  const cfg = await program.account.poolConfig.fetch(pc);
+  const mainObligation = cfg.kaminoObligation as PublicKey;
+  if (mainObligation.equals(PublicKey.default)) {
+    return { skipped: "main obligation not initialized" };
+  }
+
+  const collateral = await readObligationCollateral(connection, mainObligation);
+  if (collateral === 0n) {
+    return { skipped: "no main-pool collateral" };
+  }
+
+  const usdcVault = usdcVaultPda(mint, program.programId);
+  const obligationFarm = obligationFarmPda(mainObligation);
+
+  const withdrawIx = await program.methods
+    .withdrawFromKamino(new BN(collateral.toString()))
+    .accountsPartial({
+      poolConfig: pc,
+      crank: operatorKp.publicKey,
+      usdcVault,
+      obligation: mainObligation,
+      lendingMarket: LENDING_MARKET,
+      lendingMarketAuthority: LENDING_MARKET_AUTHORITY,
+      reserve: RESERVE,
+      reserveLiquidityMint: mint,
+      reserveSourceCollateral: RESERVE_SOURCE_COLLATERAL,
+      reserveCollateralMint: RESERVE_COLLATERAL_MINT,
+      reserveLiquiditySupply: RESERVE_LIQUIDITY_SUPPLY,
+      collateralTokenProgram: TOKEN_PROGRAM_ID,
+      liquidityTokenProgram: TOKEN_PROGRAM_ID,
+      instructionSysvarAccount: SYSVAR_INSTRUCTIONS_PUBKEY,
+      obligationFarmUserState: obligationFarm,
+      reserveFarmState: FARM_COLLATERAL,
+      farmsProgram: FARMS,
+      klendProgram: KLEND,
+    })
+    .instruction();
+
+  const depReserves = await readObligationDepositReserves(
+    connection,
+    mainObligation
+  );
+  const tx = new Transaction()
+    .add(computeBudgetIx())
+    .add(ixRefreshReserve())
+    .add(ixRefreshObligation(mainObligation, depReserves))
+    .add(withdrawIx);
+
+  const sig = await program.provider.sendAndConfirm!(tx, [operatorKp], {
+    skipPreflight: true,
+  });
+  return { collateral, sig };
+}
+
+// ---------------------------------------------------------------------------
+// runDrawCycle — the full per-draw orchestrator.
+// ---------------------------------------------------------------------------
+
+export interface RunDrawCycleOpts {
+  /** SDK Randomness instance for this round (caller created + persisted rngKp). */
+  randomness: any;
+  /** Switchboard queue (mainnet by default; pass the devnet queue if needed). */
+  queue?: PublicKey;
+  /**
+   * SURFPOOL ONLY hooks. When provided, the orchestrator:
+   *   (a) skips the live SB revealIx,
+   *   (b) on each revealAndSettle retry, calls `remockOnRetry(slot)` so the
+   *       mocked randomness account is re-bound to the slot the next tx will
+   *       likely land in,
+   *   (c) before the first revealAndSettle attempt, calls `mockReveal()` once
+   *       (with the value computed from the on-chain Draw — passed back to the
+   *       caller via `mockReveal`'s signature).
+   * Production callers leave this undefined and the SB live oracle is used.
+   */
+  surfpool?: {
+    /**
+     * Called BEFORE triggerDraw. The caller writes an un-revealed mocked
+     * randomness account (reveal_slot=0, owner=SB On-Demand PID) so the
+     * on-chain trigger_draw's owner + reveal_slot checks pass without
+     * needing to call `createRandomness`/`commitIx` against the live SB
+     * program (which fails on surfpool — the SDK's `Randomness.create`
+     * needs a recent-slot LUT init that surfpool's slot hashes don't honor;
+     * m6-buglog B6).
+     */
+    setupRandomness: () => Promise<void>;
+    /** Called once before the first settle attempt; the caller writes the
+     *  mocked REVEALED randomness account (value + initial revealSlot). */
+    mockReveal: (drawTs: bigint, totalWeight: bigint) => Promise<{
+      value: Buffer;
+      winnerPositionPda: PublicKey;
+      winnerOwner: PublicKey;
+    }>;
+    /** Called between revealAndSettle retries to re-bind the mock to `slot`. */
+    remockOnRetry: (slot: number) => Promise<void>;
+    /**
+     * Optional. Called AFTER triggerDraw confirms and BEFORE mockReveal.
+     * Use this to pauseClock for the settle phase only — pausing globally
+     * before runDrawCycle hangs harvest/withdraw/trigger confirmations
+     * (surfpool's clock-pause freezes block production → no new blockhash →
+     * confirmTransaction times out). Symmetric `afterSettle` resumes.
+     */
+    beforeSettle?: () => Promise<void>;
+    /** Optional. Called after settle completes (success OR throw). */
+    afterSettle?: () => Promise<void>;
+  };
+}
+
+export interface RunDrawCycleResult {
+  round: bigint;
+  winner: PublicKey;
+  prize: bigint;
+  harvestSig?: string;
+  withdrawMainSig?: string;
+  triggerSig: string;
+  settleSig: string;
+  compoundSig?: string;
+  warnings: string[];
+}
+
+/**
+ * The full operator-driven draw cycle (per .superstack/m6-research §arch).
+ * Sequence:
+ *   1. pre-flight: readPoolState; require !paused && !draw_in_progress &&
+ *      now >= next_draw_ts && draw_accounts_ready && growing_pot_obligation_ready.
+ *   2. (permissionless) harvestPot — full redeem of pot position; yield lands
+ *      in usdc_vault (rides the existing trigger prize formula). Skip-no-op
+ *      if returns {skipped}.
+ *   3. (operator) withdrawMainFromKamino — full redeem of the main pool, so
+ *      trigger's `vault >= total_principal + pending_winnings` guard passes
+ *      (FundsStillInKamino otherwise). Skip-no-op if the obligation holds none.
+ *   4. (operator) triggerDraw — atomic [commit, trigger_draw].
+ *   5. (surfpool) mockReveal — write the revealed randomness account so the
+ *      next-tx slot binding works. (Production: SB oracle posts the value
+ *      automatically over ~12-30 slots; the live revealIx in step 6 reads it.)
+ *   6. (operator) revealAndSettle — atomic [revealIx, settle_draw] (or just
+ *      [settle_draw] on surfpool). Retries ±slots on RandomnessNotResolved.
+ *   7. (permissionless) compoundPot — re-invest the principal + new 20% escrow.
+ *
+ * Returns `{round, winner, prize, ...sigs, warnings}`. Honest about anything
+ * skipped; throws on the first HARD error (so the operator scheduler can see
+ * it and back off).
+ */
+export async function runDrawCycle(
+  program: Program<Stewfi>,
+  operatorKp: Signer,
+  crankKp: Signer,
+  opts: RunDrawCycleOpts,
+  mint: PublicKey = USDC_MINT
+): Promise<RunDrawCycleResult> {
+  const warnings: string[] = [];
+  const queue = opts.queue ?? SWITCHBOARD_DEFAULT_QUEUE_MAINNET;
+
+  // -- 1. Pre-flight --------------------------------------------------------
+  const snap0 = await readPoolState(program, mint);
+  if (snap0.paused) throw new Error("runDrawCycle: pool is paused");
+  if (snap0.drawInProgress) {
+    throw new Error(
+      "runDrawCycle: draw already in progress — call cancelIfStuck or wait for settle"
+    );
+  }
+  if (!snap0.drawAccountsReady) {
+    throw new Error("runDrawCycle: draw_accounts_ready is false (init_draw_accounts first)");
+  }
+  if (!snap0.growingPotObligationReady) {
+    throw new Error(
+      "runDrawCycle: growing_pot_obligation_ready is false (init_growing_pot_obligation + farm first)"
+    );
+  }
+  // Read the Clock sysvar's unix_timestamp — this is exactly what the program
+  // sees in trigger_draw's cadence check. `getBlockTime(getSlot())` can lag /
+  // disagree with the Clock sysvar (especially on surfpool with paused clock),
+  // so don't use it.
+  const now = await getClockSysvarUnixTs(program.provider.connection);
+  if (BigInt(now) < snap0.nextDrawTs) {
+    throw new Error(
+      `runDrawCycle: cadence gate not open — now=${now} < next_draw_ts=${snap0.nextDrawTs}`
+    );
+  }
+
+  // -- 2. harvestPot (permissionless) ---------------------------------------
+  let harvestSig: string | undefined;
+  const hr = await harvestPot(program, crankKp, mint);
+  if (hr.skipped) warnings.push(`harvestPot skipped: ${hr.skipped}`);
+  else harvestSig = hr.sig;
+
+  // -- 3. withdrawMainFromKamino (operator) ---------------------------------
+  let withdrawMainSig: string | undefined;
+  const wr = await withdrawMainFromKamino(program, operatorKp, mint);
+  if (wr.skipped) warnings.push(`withdrawMainFromKamino skipped: ${wr.skipped}`);
+  else withdrawMainSig = wr.sig;
+
+  // -- 4. triggerDraw (operator) --------------------------------------------
+  // Surfpool: set up the un-revealed mocked rng account first (so the on-chain
+  // owner + reveal_slot==0 checks pass without calling the live SB program).
+  if (opts.surfpool?.setupRandomness) {
+    await opts.surfpool.setupRandomness();
+  }
+  const trg = await triggerDraw(
+    program,
+    operatorKp,
+    opts.randomness,
+    queue,
+    { skipCommit: !!opts.surfpool },
+    mint
+  );
+
+  // -- 5. + 6. mockReveal (surfpool) then revealAndSettle (operator) --------
+  // Surfpool only: pause the clock now (the test can swap in pauseClock via
+  // beforeSettle), so the settle slot-binding has a stable target.
+  if (opts.surfpool?.beforeSettle) {
+    await opts.surfpool.beforeSettle();
+  }
+
+  const drawAcc = await program.account.draw.fetch(trg.drawPda);
+  const drawTs = BigInt(drawAcc.drawTs.toString());
+  const totalWeight = BigInt(drawAcc.totalWeight.toString());
+
+  let plan: SettlePositionPlan;
+  if (opts.surfpool) {
+    // Surfpool: caller computes the value + winner from on-chain (drawTs,
+    // totalWeight) and writes the mocked randomness account (sets the initial
+    // reveal_slot).
+    const mocked = await opts.surfpool.mockReveal(drawTs, totalWeight);
+    const positions = await fetchAllPositions(program);
+    const metas = sortedPositionMetas(positions);
+    plan = {
+      metas,
+      winnerPositionPda: mocked.winnerPositionPda,
+      winnerOwner: mocked.winnerOwner,
+    };
+  } else {
+    // Production: the SB oracle will post the value; the revealIx in the
+    // bundled settle tx reads it. The crank computes the winner from the
+    // already-revealed value (read post-reveal). Since we send revealIx +
+    // settle atomically, the value isn't readable BEFORE the tx — so we
+    // compute the winner here from `loadData()` after reveal. But that means
+    // we'd need to send reveal first to read, then settle in a second tx,
+    // breaking the slot-bind atomicity.
+    //
+    // Two production designs are valid:
+    //   (a) PRE-PRECOMPUTE: the crank reads `randomness.loadData()` AFTER the
+    //       oracle posts but BEFORE bundling. The atomic tx is then
+    //       [revealIx (no-op if oracle already posted), settle]. This works
+    //       because revealIx is idempotent on an already-revealed account.
+    //   (b) WAIT-FOR-ORACLE: poll until loadData() returns a non-zero
+    //       revealSlot, compute the winner, then send the atomic
+    //       [revealIx, settle] tx. The revealIx in the tx is harmless (the
+    //       oracle has already posted; SB's revealIx accepts a re-post).
+    //
+    // Either way the value MUST be readable before we name the winner — and
+    // production has a live oracle, so we use (b): wait, compute, then send.
+    // For Slice 2a (test-only on surfpool), we keep this branch as a TODO so
+    // we don't ship a half-working live path. Devnet exercise is Slice 3.
+    throw new Error(
+      "runDrawCycle: production (non-surfpool) path is a Slice 3 TODO — " +
+        "use `opts.surfpool` for surfpool tests; deploy + run on devnet for the live oracle flow."
+    );
+  }
+
+  let settled;
+  try {
+    settled = await revealAndSettle(
+      program,
+      operatorKp,
+      trg.round,
+      opts.randomness,
+      plan,
+      {
+        skipReveal: !!opts.surfpool,
+        remockOnRetry: opts.surfpool?.remockOnRetry,
+      },
+      mint
+    );
+  } finally {
+    // Always run afterSettle (success or throw) so a paused clock gets resumed.
+    if (opts.surfpool?.afterSettle) {
+      await opts.surfpool.afterSettle();
+    }
+  }
+
+  // -- 7. compoundPot (permissionless) --------------------------------------
+  let compoundSig: string | undefined;
+  const cr = await compoundPot(program, crankKp, mint);
+  if (cr.skipped) warnings.push(`compoundPot skipped: ${cr.skipped}`);
+  else compoundSig = cr.sig;
+
+  return {
+    round: trg.round,
+    winner: settled.winner,
+    prize: settled.prize,
+    harvestSig,
+    withdrawMainSig,
+    triggerSig: trg.sig,
+    settleSig: settled.sig,
+    compoundSig,
+    warnings,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Internal — Clock sysvar readers (the program observes Clock::get(); using
+// these matches exactly what trigger_draw / settle_draw see at execution time).
+// Layout (Clock sysvar, sysvar account data):
+//   slot              [0..8]   u64 LE
+//   epoch_start_ts    [8..16]  i64 LE
+//   epoch             [16..24] u64 LE
+//   leader_schedule_epoch [24..32] u64 LE
+//   unix_timestamp    [32..40] i64 LE
+// ---------------------------------------------------------------------------
+const CLOCK_SYSVAR = new PublicKey("SysvarC1ock11111111111111111111111111111111");
+
+async function getClockSysvarSlot(
+  connection: import("@solana/web3.js").Connection
+): Promise<number> {
+  const info = await connection.getAccountInfo(CLOCK_SYSVAR);
+  if (!info) throw new Error("Clock sysvar not found");
+  return Number(info.data.readBigUInt64LE(0));
+}
+
+async function getClockSysvarUnixTs(
+  connection: import("@solana/web3.js").Connection
+): Promise<number> {
+  const info = await connection.getAccountInfo(CLOCK_SYSVAR);
+  if (!info) throw new Error("Clock sysvar not found");
+  // unix_timestamp is at offset 32 (i64 LE). For our use it's always positive.
+  return Number(info.data.readBigInt64LE(32));
+}

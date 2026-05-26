@@ -66,10 +66,16 @@ export function ixRefreshObligation(
 }
 
 /**
- * Read the obligation's currently-booked deposit reserves (non-default slots with
- * a positive deposited_amount). Empty obligation → []; after a deposit → [USDC
- * RESERVE]. This list feeds refresh_obligation's remaining_accounts. Direct port
- * of tests/pot.ts.
+ * Read the obligation's currently-BOOKED deposit reserves (non-default slots,
+ * regardless of amount). Empty obligation → []; after a deposit → [USDC RESERVE].
+ *
+ * IMPORTANT: after a full withdraw, klend leaves the slot with `deposit_reserve`
+ * still set to USDC + `deposited_amount = 0`. refresh_obligation cross-checks the
+ * count against the obligation's BOOKED slots (not non-zero ones), so the slot
+ * must still be passed even when its amount is 0 — otherwise refresh reverts.
+ * (Filtering on `amount > 0` was the Slice 2a B8 bug: the showcase's compound-
+ * after-harvest path emptied the slot, the filter returned [], refresh mismatched.)
+ * Direct port of tests/pot.ts with the amount filter dropped.
  */
 export async function readObligationDepositReserves(
   connection: Connection,
@@ -81,8 +87,7 @@ export async function readObligationDepositReserves(
   for (let i = 0; i < OBLIGATION_MAX_DEPOSITS; i++) {
     const off = OBLIGATION_DEPOSITS_OFFSET + i * OBLIGATION_COLLATERAL_SIZE;
     const rk = new PublicKey(info.data.subarray(off, off + 32));
-    const amt = info.data.readBigUInt64LE(off + 32);
-    if (!rk.equals(PublicKey.default) && amt > 0n) out.push(rk);
+    if (!rk.equals(PublicKey.default)) out.push(rk);
   }
   return out;
 }

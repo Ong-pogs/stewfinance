@@ -6,10 +6,12 @@
     "test:kamino": "ANCHOR_PROVIDER_URL=http://127.0.0.1:8899 ANCHOR_WALLET=$HOME/.config/solana/stewfi-dev.json ts-mocha -p ./tsconfig.json -t 1000000 tests/kamino.ts",
     "test:draw": "ANCHOR_PROVIDER_URL=http://127.0.0.1:8899 ANCHOR_WALLET=$HOME/.config/solana/stewfi-dev.json ts-mocha -p ./tsconfig.json -t 1000000 tests/draw.ts",
     "test:pot": "ANCHOR_PROVIDER_URL=http://127.0.0.1:8899 ANCHOR_WALLET=$HOME/.config/solana/stewfi-dev.json ts-mocha -p ./tsconfig.json -t 1000000 tests/pot.ts",
-    "test:crank": "ANCHOR_PROVIDER_URL=http://127.0.0.1:8899 ANCHOR_WALLET=$HOME/.config/solana/stewfi-dev.json ts-mocha -p ./tsconfig.json -t 1000000 tests/crank.ts"
+    "test:crank": "ANCHOR_PROVIDER_URL=http://127.0.0.1:8899 ANCHOR_WALLET=$HOME/.config/solana/stewfi-dev.json ts-mocha -p ./tsconfig.json -t 1000000 tests/crank.ts",
+    "test:crank2": "ANCHOR_PROVIDER_URL=http://127.0.0.1:8899 ANCHOR_WALLET=$HOME/.config/solana/stewfi-dev.json ts-mocha -p ./tsconfig.json -t 1000000 tests/crank2.ts"
   },
   "dependencies": {
-    "@coral-xyz/anchor": "^0.31.1"
+    "@coral-xyz/anchor": "^0.31.1",
+    "@switchboard-xyz/on-demand": "^3.10.2"
   },
   "devDependencies": {
     "@solana/spl-token": "^0.4.14",
