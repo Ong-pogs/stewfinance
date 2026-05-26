@@ -20,6 +20,7 @@ import {
   Signer,
   SYSVAR_INSTRUCTIONS_PUBKEY,
   AccountMeta,
+  AddressLookupTableAccount,
   VersionedTransaction,
 } from "@solana/web3.js";
 import { getAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
@@ -74,6 +75,7 @@ import {
   mockRandomness,
   vrfValueForTicket,
 } from "./vrf";
+import { createPositionsAlt } from "./alt";
 
 // Re-export the sub-modules so callers can `import { ... } from "app/crank"`.
 export * from "./constants";
@@ -81,6 +83,7 @@ export * from "./pdas";
 export * from "./klend";
 export * from "./positions";
 export * from "./vrf";
+export * from "./alt";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -465,6 +468,14 @@ export interface SettlePlan {
   windows: WinnerWindow[];
   /** True if positionCount exceeds the legacy-tx account budget (I-05 / ALT signal). */
   exceedsLegacyCap: boolean;
+  /**
+   * Slice 2b: true when the cycle SHOULD route settle through an ALT. Defaults
+   * to the same threshold `exceedsLegacyCap` uses (SETTLE_LEGACY_POSITION_CAP),
+   * but `runDrawCycle`'s `opts.alt.threshold` overrides at orchestration time.
+   * This is the lib's recommendation; callers can also force `mode: 'always' |
+   * 'never'`.
+   */
+  recommendsAlt: boolean;
   /** Human-readable warnings (cap breach, weight mismatch, no-entries, ...). */
   warnings: string[];
 }
@@ -581,6 +592,10 @@ export async function planSettle(
     onChainTotalWeight,
     windows,
     exceedsLegacyCap,
+    // Slice 2b: same threshold as the legacy-cap check by default; the
+    // orchestrator (runDrawCycle) may apply a different `opts.alt.threshold`
+    // for the actual route decision. Surfacing both lets monitoring decide.
+    recommendsAlt: exceedsLegacyCap,
     warnings,
   };
 }
@@ -800,6 +815,10 @@ export async function revealAndSettle(
   } = {},
   mint: PublicKey = USDC_MINT
 ): Promise<RevealAndSettleResult> {
+  // Slice 2b: forward any caller-supplied ALTs to the V0 tx builder. Each
+  // retry rebuilds the tx (the settle ix is regenerated for fresh signer
+  // hints if needed and `buildRevealAndSettleV0Tx` re-fetches a blockhash),
+  // so we pass `addressLookupTableAccounts` through every iteration.
   const provider = program.provider as AnchorProvider;
   const pc = poolConfigPda(mint, program.programId);
   const roundBn = new BN(round.toString());
@@ -849,7 +868,11 @@ export async function revealAndSettle(
       randomness,
       settleIx,
       operatorKp,
-      { skipReveal: opts.skipReveal, computeUnits: opts.computeUnits }
+      {
+        skipReveal: opts.skipReveal,
+        computeUnits: opts.computeUnits,
+        addressLookupTableAccounts: opts.addressLookupTableAccounts,
+      }
     );
     try {
       const sig = await sendV0(provider, tx);
@@ -1020,6 +1043,20 @@ export interface RunDrawCycleOpts {
   /** Switchboard queue (mainnet by default; pass the devnet queue if needed). */
   queue?: PublicKey;
   /**
+   * Slice 2b: ALT routing for settle.
+   *   - `mode: 'auto'`   (default): build an ALT IFF positionCount > threshold.
+   *   - `mode: 'always'`: always build an ALT (useful for testing / proving
+   *     the ALT path works on any cycle).
+   *   - `mode: 'never'`:  never build an ALT (force legacy v0).
+   *   - `threshold`: position count above which 'auto' switches on. Default 40
+   *     — comfortably below the legacy ~51 cap so we don't cut it close on a
+   *     borderline cycle. Above 50 the legacy path would simply revert.
+   */
+  alt?: {
+    mode: "auto" | "always" | "never";
+    threshold?: number;
+  };
+  /**
    * SURFPOOL ONLY hooks. When provided, the orchestrator:
    *   (a) skips the live SB revealIx,
    *   (b) on each revealAndSettle retry, calls `remockOnRetry(slot)` so the
@@ -1072,6 +1109,10 @@ export interface RunDrawCycleResult {
   triggerSig: string;
   settleSig: string;
   compoundSig?: string;
+  /** Slice 2b: the ALT address used for settle (when one was built). */
+  altAddress?: PublicKey;
+  /** Slice 2b: which route the settle tx took (legacy vs ALT-backed v0). */
+  settleRoute: "legacy" | "alt";
   warnings: string[];
 }
 
@@ -1162,7 +1203,35 @@ export async function runDrawCycle(
     mint
   );
 
-  // -- 5. + 6. mockReveal (surfpool) then revealAndSettle (operator) --------
+  // -- 5a. Slice 2b: decide ALT vs legacy + (if ALT) build the table BEFORE
+  // any clock-pause. createLookupTable + extendLookupTable txs are normal
+  // sends — pausing the clock first would freeze block production and hang
+  // their confirmations (same shape as the buglog B5 harvest-tx hang).
+  //
+  // Decide first via the current live position set (sortedPositionMetas);
+  // the on-chain settle iterates the SAME set, so this is what gets passed
+  // through revealAndSettle below.
+  const positions = await fetchAllPositions(program);
+  const metas = sortedPositionMetas(positions);
+  const altMode = opts.alt?.mode ?? "auto";
+  const altThreshold = opts.alt?.threshold ?? 40;
+  const altShouldBuild =
+    altMode === "always" ||
+    (altMode === "auto" && metas.length > altThreshold);
+
+  let altAccount: AddressLookupTableAccount | undefined;
+  let altAddress: PublicKey | undefined;
+  if (altShouldBuild) {
+    const built = await createPositionsAlt(
+      program.provider as AnchorProvider,
+      operatorKp,
+      metas
+    );
+    altAccount = built.altAccount;
+    altAddress = built.altAddress;
+  }
+
+  // -- 5b. + 6. mockReveal (surfpool) then revealAndSettle (operator) --------
   // Surfpool only: pause the clock now (the test can swap in pauseClock via
   // beforeSettle), so the settle slot-binding has a stable target.
   if (opts.surfpool?.beforeSettle) {
@@ -1177,10 +1246,10 @@ export async function runDrawCycle(
   if (opts.surfpool) {
     // Surfpool: caller computes the value + winner from on-chain (drawTs,
     // totalWeight) and writes the mocked randomness account (sets the initial
-    // reveal_slot).
+    // reveal_slot). The position list + metas were already read above (pre-ALT
+    // decision) so we reuse them — the live set hasn't changed between then
+    // and now (draw_in_progress freezes deposits/withdraws on-chain).
     const mocked = await opts.surfpool.mockReveal(drawTs, totalWeight);
-    const positions = await fetchAllPositions(program);
-    const metas = sortedPositionMetas(positions);
     plan = {
       metas,
       winnerPositionPda: mocked.winnerPositionPda,
@@ -1226,6 +1295,7 @@ export async function runDrawCycle(
       {
         skipReveal: !!opts.surfpool,
         remockOnRetry: opts.surfpool?.remockOnRetry,
+        addressLookupTableAccounts: altAccount ? [altAccount] : undefined,
       },
       mint
     );
@@ -1251,6 +1321,8 @@ export async function runDrawCycle(
     triggerSig: trg.sig,
     settleSig: settled.sig,
     compoundSig,
+    altAddress,
+    settleRoute: altAccount ? "alt" : "legacy",
     warnings,
   };
 }

@@ -43,6 +43,7 @@
  * interchangeable across Anchor 0.31 majors.
  */
 import {
+  AddressLookupTableAccount,
   Connection,
   Keypair,
   PublicKey,
@@ -254,6 +255,17 @@ export interface RevealAndSettleOpts {
    */
   skipReveal?: boolean;
   computeUnits?: number;
+  /**
+   * Slice 2b: optional Address Lookup Tables to compile into the v0 tx. When
+   * supplied, settle_draw's per-position remaining_accounts can resolve through
+   * the ALT rather than being inlined — raising the live-position cap from ~51
+   * (legacy) toward ~256 (ALT). Omit for the small-N legacy v0 path.
+   *
+   * The ALT(s) MUST contain every pubkey settle references that we want offloaded
+   * (the per-position UserPositions; fixed accounts can stay inline). Build via
+   * `createPositionsAlt` over `sortedPositionMetas(...)`.
+   */
+  addressLookupTableAccounts?: AddressLookupTableAccount[];
 }
 
 /**
@@ -289,7 +301,13 @@ export async function buildRevealAndSettleV0Tx(
     ixs.push(reveal);
   }
   ixs.push(settleDrawIx);
-  return asV0Tx(provider.connection, ixs, operatorKp.publicKey, [operatorKp]);
+  return asV0Tx(
+    provider.connection,
+    ixs,
+    operatorKp.publicKey,
+    [operatorKp],
+    opts.addressLookupTableAccounts
+  );
 }
 
 // ===========================================================================
@@ -372,14 +390,18 @@ async function asV0Tx(
   connection: Connection,
   ixs: TransactionInstruction[],
   payer: PublicKey,
-  signers: Signer[]
+  signers: Signer[],
+  addressLookupTableAccounts?: AddressLookupTableAccount[]
 ): Promise<VersionedTransaction> {
   const { blockhash } = await connection.getLatestBlockhash("confirmed");
+  // Slice 2b: when ALTs are provided, compileToV0Message moves any matching
+  // pubkeys out of the inline static account-keys list and into the ALT
+  // lookup section, raising the per-tx account ceiling toward ~256.
   const msg = new TransactionMessage({
     payerKey: payer,
     recentBlockhash: blockhash,
     instructions: ixs,
-  }).compileToV0Message();
+  }).compileToV0Message(addressLookupTableAccounts);
   const tx = new VersionedTransaction(msg);
   if (signers.length > 0) tx.sign(signers);
   return tx;
