@@ -1,0 +1,46 @@
+"use client";
+import { useState } from "react";
+import { useConnection, useWallet } from "@solana/wallet-adapter-react";
+import { getProgram, requestWithdraw, withdraw, readPosition } from "@/lib/stewfi";
+import { track } from "@/lib/track";
+
+export function WithdrawCard({ onDone }: { onDone: () => void }) {
+  const { connection } = useConnection();
+  const wallet = useWallet();
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function act() {
+    if (!wallet.publicKey) return;
+    setBusy(true); setMsg(null);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const program = getProgram(connection, wallet as any);
+      const pos = await readPosition(program, wallet.publicKey);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const requestedAt = pos ? Number((pos.withdrawRequestedAt as any).toString()) : 0;
+      if (!requestedAt) {
+        await requestWithdraw(program, wallet.publicKey);
+        track("withdraw_requested", { wallet: wallet.publicKey.toBase58() });
+        setMsg("Withdrawal requested. 24h cooldown, then withdraw. (Demo: cooldown is real on-chain.)");
+      } else {
+        await withdraw(program, wallet.publicKey);
+        track("withdraw_completed", { wallet: wallet.publicKey.toBase58() });
+        setMsg("Withdrawn. Principal returned in full.");
+        onDone();
+      }
+    } catch (e) { setMsg((e as Error).message); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="rounded-xl border border-zinc-800 p-5">
+      <button onClick={act} disabled={busy}
+        className="w-full rounded-lg border border-zinc-600 py-2 text-sm">
+        {busy ? "Working…" : "Request / complete withdrawal"}
+      </button>
+      <p className="mt-2 text-xs text-zinc-500">No-loss: your full principal is always withdrawable (24h cooldown).</p>
+      {msg && <p className="mt-2 text-sm text-zinc-300">{msg}</p>}
+    </div>
+  );
+}
