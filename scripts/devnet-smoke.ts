@@ -135,7 +135,7 @@ async function main() {
   console.log("\n=== M1: initialize ===");
   const initSig = await program.methods
     .initialize()
-    .accounts({
+    .accountsPartial({
       poolConfig: poolConfigPda,
       usdcVault: usdcVaultPda,
       usdcMint: usdcMint,
@@ -192,7 +192,7 @@ async function main() {
   );
   const depSig = await program.methods
     .deposit(new BN(100 * ONE_USDC))
-    .accounts({
+    .accountsPartial({
       poolConfig: poolConfigPda,
       userPosition: userPositionPda,
       usdcVault: usdcVaultPda,
@@ -224,7 +224,7 @@ async function main() {
   await new Promise((r) => setTimeout(r, 1500)); // let last_deposit_ts diverge
   const topupSig = await program.methods
     .deposit(new BN(50 * ONE_USDC))
-    .accounts({
+    .accountsPartial({
       poolConfig: poolConfigPda,
       userPosition: userPositionPda,
       usdcVault: usdcVaultPda,
@@ -279,7 +279,7 @@ async function main() {
   try {
     await program.methods
       .deposit(new BN(5 * ONE_USDC))
-      .accounts({
+      .accountsPartial({
         poolConfig: poolConfigPda,
         userPosition: user2PosPda,
         usdcVault: usdcVaultPda,
@@ -300,7 +300,7 @@ async function main() {
   console.log("\n=== M2: request_withdraw ===");
   const reqSig = await program.methods
     .requestWithdraw()
-    .accounts({
+    .accountsPartial({
       userPosition: userPositionPda,
       user: user.publicKey,
     })
@@ -323,7 +323,7 @@ async function main() {
   try {
     await program.methods
       .withdraw()
-      .accounts({
+      .accountsPartial({
         poolConfig: poolConfigPda,
         userPosition: userPositionPda,
         usdcVault: usdcVaultPda,
@@ -340,25 +340,36 @@ async function main() {
   console.log("  Correctly blocked with WithdrawCooldownActive (24h guard live)");
 
   // ===========================================================================
-  // M3 — presence check only (mainnet klend reserves don't exist on devnet)
+  // M3+ — presence check against the ON-CHAIN IDL (not the local file).
+  // This is the real "is the deployed program current?" gate: it reads the IDL
+  // actually published on devnet for this program, so a stale deploy cannot pass
+  // (the old version read the local target/idl file — a false positive).
   // ===========================================================================
-  console.log("\n=== M3: instruction presence (no devnet E2E) ===");
-  const ixNames = (idl.instructions || []).map((i: any) => i.name);
-  for (const need of [
-    "initKaminoObligation",
-    "initKaminoFarm",
-    "depositToKamino",
-    "withdrawFromKamino",
-  ]) {
-    const snake = need.replace(/[A-Z]/g, (c) => "_" + c.toLowerCase());
-    assert(
-      ixNames.includes(snake) || ixNames.includes(need),
-      `M3 ix missing from IDL: ${need}`
+  console.log("\n=== M3+: instruction presence (ON-CHAIN IDL) ===");
+  const onChainIdl = await Program.fetchIdl(PROGRAM_ID, provider);
+  if (!onChainIdl) {
+    throw new Error(
+      `No on-chain IDL for ${PROGRAM_ID.toBase58()} on devnet. ` +
+        "Run `anchor idl init -f target/idl/stewfi.json` (or devnet-bootstrap) first."
+    );
+  }
+  const norm = (s: string) => s.replace(/_/g, "").toLowerCase();
+  const ixNames = onChainIdl.instructions.map((i: any) => norm(i.name));
+  const required = [
+    "initialize", "deposit", "requestWithdraw", "withdraw",
+    "depositToKamino", "withdrawFromKamino", "triggerDraw",
+    "settleDraw", "claimDraw", "compoundGrowingPot", "harvestGrowingPotYield",
+  ];
+  const missing = required.filter((n) => !ixNames.includes(norm(n)));
+  if (missing.length) {
+    throw new Error(
+      `Deployed program's on-chain IDL is missing instructions: ${missing.join(", ")} ` +
+        `(stale deploy?). On-chain IDL has ${onChainIdl.instructions.length} instructions.`
     );
   }
   console.log(
-    "  M3 instructions present in deployed IDL:",
-    ixNames.filter((n: string) => n.includes("kamino") || n.includes("Kamino"))
+    `  On-chain IDL OK — ${onChainIdl.instructions.length} instructions present ` +
+      "(all M1–M5 required instructions found on devnet)."
   );
 
   console.log("\n========================================");

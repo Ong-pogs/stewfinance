@@ -8,6 +8,13 @@ skip-lint = false
 [programs.localnet]
 stewfi = "8uDmfYPMBaiLLwfZGAnhNaDm48kx19hD8kPdiR7XiRLD"
 
+[programs.devnet]
+stewfi = "8uDmfYPMBaiLLwfZGAnhNaDm48kx19hD8kPdiR7XiRLD"
+
+# Devnet deploy/bootstrap use id.json explicitly via CLI flags (not the default
+# provider below, which stays localnet so `anchor test` is unaffected):
+#   --provider.cluster devnet --provider.wallet ~/.config/solana/id.json
+
 [registry]
 url = "https://api.apr.dev"
 
