@@ -25,3 +25,8 @@ body {
     text-wrap: balance;
   }
 }
+
+:root { --stew: 270 70% 60%; }
+.stew-accent { color: hsl(var(--stew)); }
+.stew-bg { background: hsl(var(--stew)); }
+.cauldron-glow { box-shadow: 0 0 40px -10px hsl(var(--stew) / 0.6); }
