@@ -1,101 +1,42 @@
-import Image from "next/image";
+"use client";
+import Link from "next/link";
+import { useEffect } from "react";
+import { track } from "@/lib/track";
 
 export default function Home() {
+  useEffect(() => { track("visit", { props: { page: "/" } }); }, []);
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="https://nextjs.org/icons/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-semibold">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
-
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="https://nextjs.org/icons/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:min-w-44"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="https://nextjs.org/icons/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="https://nextjs.org/icons/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="https://nextjs.org/icons/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
-    </div>
+    <main className="mx-auto max-w-3xl px-6 py-20 text-center">
+      <h1 className="text-5xl font-bold tracking-tight">
+        A savings account where the <span className="stew-accent">interest is the prize</span>.
+      </h1>
+      <p className="mt-6 text-lg text-zinc-400">
+        Deposit USDC. Your principal stays yours. Each week the pooled yield becomes one
+        winner&apos;s prize. No loss, all upside.
+      </p>
+      <div className="mt-10">
+        <Link href="/app"
+          className="stew-bg cauldron-glow inline-block rounded-xl px-8 py-4 font-semibold text-white">
+          Try the demo →
+        </Link>
+      </div>
+      <ol className="mt-16 grid gap-6 text-left sm:grid-cols-3">
+        <li className="rounded-xl border border-zinc-800 p-5">
+          <div className="stew-accent text-sm font-mono">01</div>
+          <div className="mt-2 font-semibold">Deposit USDC</div>
+          <div className="mt-1 text-sm text-zinc-400">Min 10. Withdraw anytime (24h cooldown).</div>
+        </li>
+        <li className="rounded-xl border border-zinc-800 p-5">
+          <div className="stew-accent text-sm font-mono">02</div>
+          <div className="mt-2 font-semibold">Pool earns yield</div>
+          <div className="mt-1 text-sm text-zinc-400">Pooled USDC earns interest while you hold.</div>
+        </li>
+        <li className="rounded-xl border border-zinc-800 p-5">
+          <div className="stew-accent text-sm font-mono">03</div>
+          <div className="mt-2 font-semibold">Weekly prize</div>
+          <div className="mt-1 text-sm text-zinc-400">The interest goes to one winner. Principal stays.</div>
+        </li>
+      </ol>
+    </main>
   );
 }
