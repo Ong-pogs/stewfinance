@@ -87,7 +87,8 @@ export function SimulatedDraw({
           {" → "}
           <span className="stew-accent font-semibold">{(myOdds * 100).toFixed(1)}% chance</span> this week
           <div className="mt-0.5 text-xs text-zinc-500">
-            Odds rise as your deposit ages — this updates every time the page refreshes.
+            Live estimate — your share moves as others deposit or withdraw, and as all deposits
+            age. New players start near 0% and ramp up. One winner per draw.
           </div>
         </div>
       )}
