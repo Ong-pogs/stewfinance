@@ -15,6 +15,9 @@ export default function AppPage() {
   const wallet = useWallet();
   const [amount, setAmount] = useState<BN | null>(null);
   const [poolTotal, setPoolTotal] = useState<BN | null>(null);
+  const [firstTs, setFirstTs] = useState<BN | null>(null);
+  const [sumAmount, setSumAmount] = useState<BN | null>(null);
+  const [sumAmtFirstTs, setSumAmtFirstTs] = useState<BN | null>(null);
 
   useEffect(() => { track("visit", { props: { page: "/app" } }); }, []);
 
@@ -24,7 +27,10 @@ export default function AppPage() {
     const program = getProgram(connection, wallet as any);
     const [pos, pool] = await Promise.all([readPosition(program, wallet.publicKey), readPool(program)]);
     setAmount(pos ? (pos.amount as BN) : null);
+    setFirstTs(pos ? (pos.firstDepositTs as BN) : null);
     setPoolTotal(pool ? (pool.totalPrincipal as BN) : null);
+    setSumAmount(pool ? (pool.sumAmount as BN) : null);
+    setSumAmtFirstTs(pool ? (pool.sumAmountFirstTs as BN) : null);
   }, [connection, wallet]);
 
   useEffect(() => { refresh(); }, [refresh]);
@@ -42,7 +48,13 @@ export default function AppPage() {
           <PositionCard amount={amount} poolTotal={poolTotal} />
           {!amount && <DepositCard onDone={refresh} />}
           {amount && <WithdrawCard onDone={refresh} />}
-          <SimulatedDraw poolTotal={poolTotal} myAmount={amount} />
+          <SimulatedDraw
+            poolTotal={poolTotal}
+            myAmount={amount}
+            firstDepositTs={firstTs}
+            sumAmount={sumAmount}
+            sumAmountFirstTs={sumAmtFirstTs}
+          />
         </div>
       )}
     </main>
