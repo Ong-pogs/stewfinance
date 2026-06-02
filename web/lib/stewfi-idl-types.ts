@@ -1686,6 +1686,66 @@ export type Stewfi = {
       "args": []
     },
     {
+      "name": "setNextDrawTs",
+      "docs": [
+        "Admin-only: set the earliest unix timestamp at which the next draw may",
+        "`trigger_draw`. `init_draw_accounts` arms the cadence 7 days out; this lets",
+        "the admin open the first draw immediately or reschedule. Operational control",
+        "only — moves no funds, does not touch weights or the in-progress lock."
+      ],
+      "discriminator": [
+        7,
+        216,
+        97,
+        158,
+        105,
+        132,
+        76,
+        99
+      ],
+      "accounts": [
+        {
+          "name": "poolConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool_config.usdc_mint",
+                "account": "poolConfig"
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "ts",
+          "type": "i64"
+        }
+      ]
+    },
+    {
       "name": "setOperator",
       "docs": [
         "Admin-gated operator rotation (audit L-01). Updates `pool_config.operator`",
