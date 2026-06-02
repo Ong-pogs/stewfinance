@@ -26,6 +26,8 @@ web/.env.local
 
 # Devnet faucet mint-authority secret (thin demo) — never commit
 .faucet-authority.json
+# Devnet demo depositor keypair (draw demo) — never commit
+.demo-user.json
 # Local funnel-events sink (thin demo, used when Supabase is not configured)
 web/.demo-events.local.jsonl
 

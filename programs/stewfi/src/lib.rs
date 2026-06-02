@@ -70,6 +70,11 @@ pub const BPS_DENOMINATOR: u64 = 10_000;
 /// surfpool mainnet fork. Used as a defense-in-depth owner check in trigger_draw.
 pub const SWITCHBOARD_ON_DEMAND_PID: Pubkey =
     pubkey!("SBondMDrcV3K4kxZR1HNVT7osZxAHVHgYXL5Ze1oMUv");
+/// Switchboard On-Demand program id (DEVNET). Accepted alongside the mainnet PID
+/// so the devnet product can run live VRF draws. Safe on mainnet: the devnet
+/// program is not deployed there, so no account can be owned by this id.
+pub const SWITCHBOARD_ON_DEMAND_PID_DEVNET: Pubkey =
+    pubkey!("Aio4gaXjXzJNVLtzwtNVmSqGKpANtXhybbkhtAC94ji2");
 
 // -----------------------------------------------------------------------------
 // M5 — GROWING POT (compound the 20% escrow into Kamino, harvest its yield)
@@ -875,7 +880,8 @@ pub mod stewfi {
 
         // Validate the randomness account is a real, un-revealed On-Demand acct.
         require!(
-            *ctx.accounts.randomness_account.owner == SWITCHBOARD_ON_DEMAND_PID,
+            *ctx.accounts.randomness_account.owner == SWITCHBOARD_ON_DEMAND_PID
+                || *ctx.accounts.randomness_account.owner == SWITCHBOARD_ON_DEMAND_PID_DEVNET,
             StewfiError::InvalidRandomnessAccount
         );
         let randomness_data =
@@ -1310,6 +1316,21 @@ pub mod stewfi {
         );
         pool_config.operator = new_operator;
         msg!("Operator rotated to {}", new_operator);
+        Ok(())
+    }
+
+    /// Admin-only: set the earliest unix timestamp at which the next draw may
+    /// `trigger_draw`. `init_draw_accounts` arms the cadence 7 days out; this lets
+    /// the admin open the first draw immediately or reschedule. Operational control
+    /// only — moves no funds, does not touch weights or the in-progress lock.
+    pub fn set_next_draw_ts(ctx: Context<SetOperator>, ts: i64) -> Result<()> {
+        let pool_config = &mut ctx.accounts.pool_config;
+        require!(
+            ctx.accounts.admin.key() == pool_config.admin,
+            StewfiError::Unauthorized
+        );
+        pool_config.next_draw_ts = ts;
+        msg!("next_draw_ts set to {}", ts);
         Ok(())
     }
 
