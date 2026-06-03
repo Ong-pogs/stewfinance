@@ -13,6 +13,8 @@ import { DrawHistory } from "@/components/draw-history";
 import { ShareCard } from "@/components/share-card";
 import { PotTicker } from "@/components/pot-ticker";
 import { Leaderboard } from "@/components/leaderboard";
+import { TicketsViz } from "@/components/tickets-viz";
+import { Badges } from "@/components/badges";
 import type { PositionRow } from "@/components/leaderboard";
 import { getProgram, readPosition, readPool, readCurrentDraw, listDraws, readAllPositions, DrawSummary } from "@/lib/stewfi";
 import { fmtUsdc } from "@/lib/format";
@@ -26,6 +28,7 @@ export default function AppPage() {
   const [poolTotal, setPoolTotal] = useState<BN | null>(null);
   const [nextDrawTs, setNextDrawTs] = useState<BN | null>(null);
   const [firstTs, setFirstTs] = useState<BN | null>(null);
+  const [withdrawRequestedAt, setWithdrawRequestedAt] = useState<BN | null>(null);
   const [sumAmount, setSumAmount] = useState<BN | null>(null);
   const [sumAmtFirstTs, setSumAmtFirstTs] = useState<BN | null>(null);
   const [currentDraw, setCurrentDraw] = useState<Awaited<ReturnType<typeof readCurrentDraw>>>(null);
@@ -62,6 +65,7 @@ export default function AppPage() {
     ]);
     setAmount(pos ? (pos.amount as BN) : null);
     setFirstTs(pos ? (pos.firstDepositTs as BN) : null);
+    setWithdrawRequestedAt(pos ? (pos.withdrawRequestedAt as BN) : null);
     setPoolTotal(poolData ? (poolData.totalPrincipal as BN) : null);
     setSumAmount(poolData ? (poolData.sumAmount as BN) : null);
     setSumAmtFirstTs(poolData ? (poolData.sumAmountFirstTs as BN) : null);
@@ -93,6 +97,13 @@ export default function AppPage() {
             />
           )}
           <PositionCard amount={amount} poolTotal={poolTotal} />
+          {/* Live entries card — real on-chain odds formula, distinct from SimulatedDraw preview */}
+          <TicketsViz
+            myAmount={amount}
+            firstDepositTs={firstTs}
+            sumAmount={sumAmount}
+            sumAmountFirstTs={sumAmtFirstTs}
+          />
           {!amount && (
             <DepositCard
               onDone={() => {
@@ -170,6 +181,15 @@ export default function AppPage() {
             firstDepositTs={firstTs}
             sumAmount={sumAmount}
             sumAmountFirstTs={sumAmtFirstTs}
+          />
+
+          {/* Achievements — cosmetic badges from on-chain facts */}
+          <Badges
+            amount={amount}
+            firstDepositTs={firstTs}
+            withdrawRequestedAt={withdrawRequestedAt}
+            walletPubkey={wallet.publicKey ?? null}
+            draws={draws}
           />
 
           {/* Leaderboard — stake / weeks / referrals */}
