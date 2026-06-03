@@ -26,7 +26,12 @@ export async function readPosition(program: Program<Stewfi>, user: PublicKey) {
 
 export async function readAllPositions(program: Program<Stewfi>) {
   const all = await program.account.userPosition.all();
-  return all.map((a) => ({ user: a.account.user as PublicKey, amount: a.account.amount as BN }));
+  return all.map((a) => ({
+    user: a.account.user as PublicKey,
+    amount: a.account.amount as BN,
+    firstDepositTs: a.account.firstDepositTs as BN,
+    withdrawRequestedAt: a.account.withdrawRequestedAt as BN,
+  }));
 }
 
 export async function deposit(program: Program<Stewfi>, user: PublicKey, amount: BN): Promise<string> {
@@ -69,6 +74,7 @@ export type DrawSummary = {
   winnerAmount: BN;
   winnerClaimed: boolean;
   drawTs: BN;
+  growingPotAmount: BN;
 };
 
 /** Fetch a single Draw account by round number. Returns null if not yet created. */
@@ -101,6 +107,7 @@ export async function listDraws(program: Program<Stewfi>): Promise<DrawSummary[]
         winnerAmount: a.account.winnerAmount as BN,
         winnerClaimed: a.account.winnerClaimed as boolean,
         drawTs: a.account.drawTs as BN,
+        growingPotAmount: (a.account.growingPotAmount ?? new BN(0)) as BN,
       }))
       .sort((a, b) => b.round - a.round);
   } catch { return []; }

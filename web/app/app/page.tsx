@@ -10,7 +10,9 @@ import { WithdrawCard } from "@/components/withdraw-card";
 import { DrawCard } from "@/components/draw-card";
 import { ClaimCard } from "@/components/claim-card";
 import { DrawHistory } from "@/components/draw-history";
+import { ShareCard } from "@/components/share-card";
 import { getProgram, readPosition, readPool, readCurrentDraw, listDraws, DrawSummary } from "@/lib/stewfi";
+import { fmtUsdc } from "@/lib/format";
 import { Stewfi } from "@/lib/idl";
 import { track } from "@/lib/track";
 
@@ -26,8 +28,20 @@ export default function AppPage() {
   const [currentDraw, setCurrentDraw] = useState<Awaited<ReturnType<typeof readCurrentDraw>>>(null);
   const [draws, setDraws] = useState<DrawSummary[]>([]);
   const [program, setProgram] = useState<Program<Stewfi> | null>(null);
+  const [justDeposited, setJustDeposited] = useState(false);
 
-  useEffect(() => { track("visit", { props: { page: "/app" } }); }, []);
+  // Track page visit and capture referral code on mount (first-touch only).
+  useEffect(() => {
+    track("visit", { props: { page: "/app" } });
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const ref = params.get("ref");
+      if (ref && !localStorage.getItem("stew_ref")) {
+        localStorage.setItem("stew_ref", ref);
+        track("referral_visit", { props: { ref } });
+      }
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!wallet.publicKey) { setAmount(null); return; }
@@ -63,7 +77,34 @@ export default function AppPage() {
       ) : (
         <div className="space-y-5">
           <PositionCard amount={amount} poolTotal={poolTotal} />
-          {!amount && <DepositCard onDone={refresh} />}
+          {!amount && (
+            <DepositCard
+              onDone={() => {
+                // Fire referral_deposit if this wallet came via a referral link.
+                const ref =
+                  typeof window !== "undefined"
+                    ? localStorage.getItem("stew_ref")
+                    : null;
+                if (ref && wallet.publicKey) {
+                  track("referral_deposit", {
+                    wallet: wallet.publicKey.toBase58(),
+                    props: { ref },
+                  });
+                }
+                setJustDeposited(true);
+                refresh();
+              }}
+            />
+          )}
+          {/* Pre-deposit share card — shown briefly after a confirmed deposit */}
+          {justDeposited && wallet.publicKey && (
+            <ShareCard
+              mode="pre-deposit"
+              potUsdc={poolTotal ? fmtUsdc(poolTotal) : undefined}
+              referralCode={wallet.publicKey.toBase58()}
+              wallet={wallet.publicKey.toBase58()}
+            />
+          )}
           {amount && <WithdrawCard onDone={refresh} />}
 
           {/* Live draw card — reads on-chain; graceful null when no draw accounts yet */}
@@ -87,6 +128,24 @@ export default function AppPage() {
             draws={draws}
             onDone={refresh}
           />
+          {/* Win share card — shown when the connected wallet has a claimable win */}
+          {wallet.publicKey && (() => {
+            const claimable = draws.find(
+              (d) =>
+                d.status === "settled" &&
+                !d.winnerClaimed &&
+                d.winner.equals(wallet.publicKey!),
+            );
+            return claimable ? (
+              <ShareCard
+                mode="win"
+                round={claimable.round}
+                amount={fmtUsdc(claimable.winnerAmount)}
+                referralCode={wallet.publicKey!.toBase58()}
+                wallet={wallet.publicKey!.toBase58()}
+              />
+            ) : null;
+          })()}
 
           {/* Simulated draw — odds explainer, kept as "preview your odds" */}
           <SimulatedDraw

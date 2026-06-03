@@ -6,6 +6,7 @@ import { supabaseAdmin } from "@/lib/supabase";
 const ALLOWED = new Set([
   "visit", "connect", "faucet", "deposit_submitted", "deposit_confirmed",
   "withdraw_requested", "withdraw_completed",
+  "share_clicked", "referral_visit", "referral_deposit",
 ]);
 const LOCAL_SINK = path.join(process.cwd(), ".demo-events.local.jsonl");
 

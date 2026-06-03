@@ -1,11 +1,7 @@
 "use client";
 import { DrawSummary } from "@/lib/stewfi";
-import { fmtUsdc } from "@/lib/format";
+import { fmtUsdc, abbrev } from "@/lib/format";
 import { statusLabel } from "@/lib/draw-utils";
-
-function abbrev(pubkey: string): string {
-  return pubkey.slice(0, 4) + "…" + pubkey.slice(-4);
-}
 
 export function DrawHistory({ draws }: { draws: DrawSummary[] }) {
   if (draws.length === 0) {

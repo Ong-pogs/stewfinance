@@ -7,6 +7,7 @@ export const dynamic = "force-dynamic";
 const EVENTS = [
   "visit", "connect", "faucet", "deposit_submitted",
   "deposit_confirmed", "withdraw_requested", "withdraw_completed",
+  "share_clicked", "referral_visit", "referral_deposit",
 ];
 
 async function countsFromSupabase() {
