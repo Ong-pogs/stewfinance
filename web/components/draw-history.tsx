@@ -22,6 +22,7 @@ export function DrawHistory({ draws }: { draws: DrawSummary[] }) {
             <tr className="text-zinc-500 border-b border-zinc-800">
               <th className="pb-2 pr-4">Round</th>
               <th className="pb-2 pr-4">Prize (USDC)</th>
+              <th className="pb-2 pr-4">Pot fed (USDC)</th>
               <th className="pb-2 pr-4">Winner</th>
               <th className="pb-2 pr-4">Status</th>
               <th className="pb-2">Claimed</th>
@@ -34,6 +35,11 @@ export function DrawHistory({ draws }: { draws: DrawSummary[] }) {
                 <td className="py-2 pr-4 font-mono text-zinc-200">
                   {d.status === "settled" || d.status === "claimed"
                     ? fmtUsdc(d.prizePool)
+                    : "—"}
+                </td>
+                <td className="py-2 pr-4 font-mono text-purple-400">
+                  {d.status === "settled" || d.status === "claimed"
+                    ? fmtUsdc(d.growingPotAmount)
                     : "—"}
                 </td>
                 <td className="py-2 pr-4 font-mono text-zinc-400">

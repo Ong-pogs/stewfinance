@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { BN, Program } from "@coral-xyz/anchor";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { ConnectButton } from "@/components/connect-button";
@@ -8,6 +8,7 @@ import { PositionCard } from "@/components/position-card";
 import { SimulatedDraw } from "@/components/simulated-draw";
 import { WithdrawCard } from "@/components/withdraw-card";
 import { DrawCard } from "@/components/draw-card";
+import { DrawReveal } from "@/components/draw-reveal";
 import { ClaimCard } from "@/components/claim-card";
 import { DrawHistory } from "@/components/draw-history";
 import { ShareCard } from "@/components/share-card";
@@ -37,6 +38,8 @@ export default function AppPage() {
   const [justDeposited, setJustDeposited] = useState(false);
   const [positions, setPositions] = useState<PositionRow[]>([]);
   const [pool, setPool] = useState<Awaited<ReturnType<typeof readPool>>>(null);
+  const [showReveal, setShowReveal] = useState(false);
+  const prevDrawStatusRef = useRef<string | null>(null);
 
   // Track page visit and capture referral code on mount (first-touch only).
   useEffect(() => {
@@ -77,6 +80,17 @@ export default function AppPage() {
   }, [connection, wallet]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  // Detect committed → settled transition and surface DrawReveal prominently.
+  useEffect(() => {
+    const newStatus = currentDraw
+      ? Object.keys(currentDraw.status as object)[0]
+      : null;
+    if (prevDrawStatusRef.current === "committed" && newStatus === "settled") {
+      setShowReveal(true);
+    }
+    prevDrawStatusRef.current = newStatus;
+  }, [currentDraw]);
 
   return (
     <main className="mx-auto max-w-md px-6 py-12">
@@ -147,6 +161,34 @@ export default function AppPage() {
             nextDrawTs={nextDrawTs}
             poolTotal={poolTotal}
           />
+
+          {/* Draw reveal — brewing/settled panel for current draw */}
+          {currentDraw && wallet.publicKey && (() => {
+            const drawStatus = Object.keys(currentDraw.status as object)[0];
+            // Always show for committed/settled; for settled also respect the
+            // showReveal prominence flag (set on committed→settled transition).
+            if (drawStatus === "committed" || drawStatus === "settled" || showReveal) {
+              const revealDraw: import("@/lib/stewfi").DrawSummary = {
+                round: (currentDraw.round as BN).toNumber(),
+                status: drawStatus,
+                prizePool: currentDraw.prizePool as BN,
+                winner: currentDraw.winner as import("@solana/web3.js").PublicKey,
+                winnerAmount: currentDraw.winnerAmount as BN,
+                winnerClaimed: currentDraw.winnerClaimed as boolean,
+                drawTs: currentDraw.drawTs as BN,
+                growingPotAmount: (currentDraw.growingPotAmount ?? new BN(0)) as BN,
+              };
+              return (
+                <DrawReveal
+                  draw={revealDraw}
+                  walletPubkey={wallet.publicKey}
+                  potUsdc={pool ? fmtUsdc(pool.potPrincipalUsdc as BN) : "0.00"}
+                  referralCode={wallet.publicKey.toBase58()}
+                />
+              );
+            }
+            return null;
+          })()}
 
           {/* Claim banner — only visible if connected wallet won a settled draw */}
           <ClaimCard
