@@ -77,7 +77,7 @@ export function SimulatedDraw({
         <p className="mt-1">
           <span className="stew-accent font-semibold">Weight = deposit size × time held.</span>{" "}
           Deposit more, or leave it parked longer, and your odds climb. Topping up keeps your
-          start time; a full withdraw resets it. Principal is never at stake.
+          start time; a full withdraw resets it. Principal is never at risk.
         </p>
       </div>
 
