@@ -11,7 +11,10 @@ import { DrawCard } from "@/components/draw-card";
 import { ClaimCard } from "@/components/claim-card";
 import { DrawHistory } from "@/components/draw-history";
 import { ShareCard } from "@/components/share-card";
-import { getProgram, readPosition, readPool, readCurrentDraw, listDraws, DrawSummary } from "@/lib/stewfi";
+import { PotTicker } from "@/components/pot-ticker";
+import { Leaderboard } from "@/components/leaderboard";
+import type { PositionRow } from "@/components/leaderboard";
+import { getProgram, readPosition, readPool, readCurrentDraw, listDraws, readAllPositions, DrawSummary } from "@/lib/stewfi";
 import { fmtUsdc } from "@/lib/format";
 import { Stewfi } from "@/lib/idl";
 import { track } from "@/lib/track";
@@ -29,6 +32,8 @@ export default function AppPage() {
   const [draws, setDraws] = useState<DrawSummary[]>([]);
   const [program, setProgram] = useState<Program<Stewfi> | null>(null);
   const [justDeposited, setJustDeposited] = useState(false);
+  const [positions, setPositions] = useState<PositionRow[]>([]);
+  const [pool, setPool] = useState<Awaited<ReturnType<typeof readPool>>>(null);
 
   // Track page visit and capture referral code on mount (first-touch only).
   useEffect(() => {
@@ -48,20 +53,23 @@ export default function AppPage() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const prog = getProgram(connection, wallet as any);
     setProgram(prog);
-    const [pos, pool, draw, allDraws] = await Promise.all([
+    const [pos, poolData, draw, allDraws, allPositions] = await Promise.all([
       readPosition(prog, wallet.publicKey),
       readPool(prog),
       readCurrentDraw(prog),
       listDraws(prog),
+      readAllPositions(prog),
     ]);
     setAmount(pos ? (pos.amount as BN) : null);
     setFirstTs(pos ? (pos.firstDepositTs as BN) : null);
-    setPoolTotal(pool ? (pool.totalPrincipal as BN) : null);
-    setSumAmount(pool ? (pool.sumAmount as BN) : null);
-    setSumAmtFirstTs(pool ? (pool.sumAmountFirstTs as BN) : null);
-    setNextDrawTs(pool ? (pool.nextDrawTs as BN) : null);
+    setPoolTotal(poolData ? (poolData.totalPrincipal as BN) : null);
+    setSumAmount(poolData ? (poolData.sumAmount as BN) : null);
+    setSumAmtFirstTs(poolData ? (poolData.sumAmountFirstTs as BN) : null);
+    setNextDrawTs(poolData ? (poolData.nextDrawTs as BN) : null);
     setCurrentDraw(draw);
     setDraws(allDraws);
+    setPositions(allPositions as PositionRow[]);
+    setPool(poolData);
   }, [connection, wallet]);
 
   useEffect(() => { refresh(); }, [refresh]);
@@ -76,6 +84,14 @@ export default function AppPage() {
         <p className="text-zinc-400">Connect a wallet to try a deposit.</p>
       ) : (
         <div className="space-y-5">
+          {pool && (
+            <PotTicker
+              pool={{
+                potPrincipalUsdc: (pool.potPrincipalUsdc as BN) ?? new BN(0),
+                totalPrincipal: (pool.totalPrincipal as BN) ?? new BN(0),
+              }}
+            />
+          )}
           <PositionCard amount={amount} poolTotal={poolTotal} />
           {!amount && (
             <DepositCard
@@ -154,6 +170,12 @@ export default function AppPage() {
             firstDepositTs={firstTs}
             sumAmount={sumAmount}
             sumAmountFirstTs={sumAmtFirstTs}
+          />
+
+          {/* Leaderboard — stake / weeks / referrals */}
+          <Leaderboard
+            positions={positions}
+            walletPubkey={wallet.publicKey ?? null}
           />
 
           {/* Draw history table */}
