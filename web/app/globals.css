@@ -2,36 +2,81 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/* ---------------------------------------------------------------------------
+ * StewFi app theme — Linen Pearl DARK (ported from stewfinance-landing)
+ * Warm near-black surfaces + warm-brown/tan accents. DARK-ONLY (no toggle).
+ * Token values copied verbatim from the landing's `.dark` block:
+ *   /Users/ongeeshen/Project/stewfinance-landing/app/globals.css lines 50-78
+ * (set here as the default :root since the app is dark-only).
+ * --gradient-* are the dark-pearl hero/CTA gradients per the redesign spec.
+ * --------------------------------------------------------------------------- */
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+:root {
+  --background: oklch(0.13 0.015 70);     /* warm near-black  ~#181410 */
+  --foreground: oklch(0.97 0.01 70);      /* warm off-white   ~#F4EFE7 */
+
+  --card: oklch(0.18 0.02 70);            /* warm dark surface ~#241E17 */
+  --card-foreground: oklch(0.97 0.01 70);
+
+  --popover: oklch(0.20 0.02 70);
+  --popover-foreground: oklch(0.97 0.01 70);
+
+  --primary: oklch(0.74 0.05 50);         /* warm tan accent  ~#CBB291 */
+  --primary-foreground: oklch(0.10 0 0);  /* near-black on tan */
+
+  --secondary: oklch(0.22 0.03 70);       /* ~#2e2920 */
+  --secondary-foreground: oklch(0.97 0.01 70);
+
+  --muted: oklch(0.20 0.02 70);
+  --muted-foreground: oklch(0.67 0.02 70);/* warm gray text   ~#A2937C */
+
+  --accent: oklch(0.24 0.025 55);
+  --accent-foreground: oklch(0.97 0.01 70);
+  --accent-warm: oklch(0.82 0.06 60);     /* brighter tan for big numbers ~#D8C3A0 */
+
+  --destructive: oklch(0.55 0.22 25);     /* errors */
+  --destructive-foreground: oklch(0.98 0 0);
+
+  --border: oklch(0.26 0.025 70);         /* ~#383026 */
+  --input: oklch(0.18 0.02 70);
+  --ring: oklch(0.74 0.05 50);
+
+  --radius: 0.5rem;                        /* 8px base; sm/md/lg scale below */
+
+  /* Gradients — hero/CTA/halo only, NOT body UI (dark-pearl, screen-blend). */
+  --gradient-primary: linear-gradient(135deg, #6B5A47, #5A4838, #4D3D2E);
+  --gradient-halo: conic-gradient(from 0deg, #4a3a28, #5a452f, #553f2c, #4a3a28);
+  --gradient-text: linear-gradient(90deg, #CBB291, #D8C3A0);
+
+  /* Subtle warm glow — reserved for the pot hero + draw-reveal only. */
+  --glow-warm: oklch(0.74 0.05 50);
 }
 
 body {
-  color: var(--foreground);
   background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-feature-settings: "cv01", "cv03";
 }
 
 @layer utilities {
   .text-balance {
     text-wrap: balance;
   }
+  /* Numbers (amounts, odds, countdowns, addresses) must not jitter. */
+  .font-mono {
+    font-variant-numeric: tabular-nums;
+  }
 }
 
-:root { --stew: 270 80% 65%; }
-.stew-accent { color: hsl(var(--stew)); }
-.stew-bg { background: hsl(var(--stew)); }
-.cauldron-glow { box-shadow: 0 0 56px -8px hsl(var(--stew) / 0.75); }
+/* ── Legacy theme class names (redefined warm so existing usages inherit the
+ *    new look gracefully; later tasks strip them from generic cards). ─────── */
+.stew-accent { color: var(--accent-warm); }
+.stew-bg { background: var(--primary); color: var(--primary-foreground); }
+/* Subtle warm halo — was a loud purple glow. Much lower intensity now. */
+.cauldron-glow { box-shadow: 0 0 40px -16px var(--glow-warm); }
 
-/* ── Pot ticker animations ─────────────────────────────────────────── */
+/* ── Pot ticker animations (warm) ──────────────────────────────────── */
 
 @keyframes odometer-roll {
   0%   { transform: translateY(0); }
@@ -43,9 +88,9 @@ body {
 }
 
 @keyframes pot-rise {
-  0%   { transform: translateY(6px); opacity: 0.6; text-shadow: 0 0 0px hsl(var(--stew) / 0); }
-  60%  { transform: translateY(-2px); opacity: 1;   text-shadow: 0 0 24px hsl(var(--stew) / 0.7); }
-  100% { transform: translateY(0);   opacity: 1;   text-shadow: 0 0 40px hsl(var(--stew) / 0.9); }
+  0%   { transform: translateY(6px); opacity: 0.6; text-shadow: 0 0 0px var(--glow-warm); }
+  60%  { transform: translateY(-2px); opacity: 1;   text-shadow: 0 0 18px color-mix(in oklch, var(--glow-warm) 45%, transparent); }
+  100% { transform: translateY(0);   opacity: 1;   text-shadow: 0 0 28px color-mix(in oklch, var(--glow-warm) 55%, transparent); }
 }
 
 .animate-odometer-roll {
@@ -56,13 +101,13 @@ body {
   animation: pot-rise 0.6s ease-out forwards;
 }
 
-/* ── Draw-reveal / cauldron animations ─────────────────────────────── */
+/* ── Draw-reveal / cauldron animations (warm) ──────────────────────── */
 
 @keyframes cauldron-bubble {
-  0%   { transform: scale(1);    opacity: 0.7; box-shadow: 0 0 32px -8px hsl(var(--stew) / 0.5); }
-  40%  { transform: scale(1.03); opacity: 0.9; box-shadow: 0 0 56px -4px hsl(var(--stew) / 0.8); }
-  70%  { transform: scale(0.99); opacity: 1;   box-shadow: 0 0 72px -2px hsl(var(--stew) / 0.95); }
-  100% { transform: scale(1);    opacity: 0.7; box-shadow: 0 0 32px -8px hsl(var(--stew) / 0.5); }
+  0%   { transform: scale(1);    opacity: 0.8; box-shadow: 0 0 24px -12px color-mix(in oklch, var(--glow-warm) 35%, transparent); }
+  40%  { transform: scale(1.02); opacity: 0.95; box-shadow: 0 0 40px -12px color-mix(in oklch, var(--glow-warm) 50%, transparent); }
+  70%  { transform: scale(0.99); opacity: 1;   box-shadow: 0 0 52px -10px color-mix(in oklch, var(--glow-warm) 60%, transparent); }
+  100% { transform: scale(1);    opacity: 0.8; box-shadow: 0 0 24px -12px color-mix(in oklch, var(--glow-warm) 35%, transparent); }
 }
 
 @keyframes reveal-burst {
