@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BN, Program } from "@coral-xyz/anchor";
+import { AnchorProvider, BN, Program } from "@coral-xyz/anchor";
+import { Connection, PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { ConnectButton } from "@/components/connect-button";
 import { DepositCard } from "@/components/deposit-card";
@@ -19,7 +20,8 @@ import type { PositionRow } from "@/components/leaderboard";
 import { getProgram, readPosition, readPool, readCurrentDraw, listDraws, readAllPositions, DrawSummary } from "@/lib/stewfi";
 import { fmtUsdc } from "@/lib/format";
 import { formatCountdown } from "@/lib/draw-utils";
-import { Stewfi } from "@/lib/idl";
+import { STEWFI_IDL, Stewfi } from "@/lib/idl";
+import { RPC_URL } from "@/lib/constants";
 import { track } from "@/lib/track";
 
 export default function AppPage() {
@@ -40,6 +42,8 @@ export default function AppPage() {
   const [pool, setPool] = useState<Awaited<ReturnType<typeof readPool>>>(null);
   const [showReveal, setShowReveal] = useState(false);
   const [heroSecsLeft, setHeroSecsLeft] = useState<number>(0);
+  // Read-only pool snapshot for the disconnected hero teaser (no signer needed).
+  const [teaserPot, setTeaserPot] = useState<BN | null>(null);
   const prevDrawStatusRef = useRef<string | null>(null);
 
   // Track page visit and capture referral code on mount (first-touch only).
@@ -82,6 +86,32 @@ export default function AppPage() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  // Disconnected teaser — read the live pot with a read-only provider (account
+  // fetches need no signer). Cheap single read; falls back to a static teaser.
+  useEffect(() => {
+    if (wallet.connected) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const readOnly = new Connection(RPC_URL, "confirmed");
+        const provider = new AnchorProvider(
+          readOnly,
+          // Read-only wallet: never signs, only used to satisfy the provider type.
+          { publicKey: PublicKey.default } as AnchorProvider["wallet"],
+          { commitment: "confirmed" },
+        );
+        const prog = new Program<Stewfi>(STEWFI_IDL, provider);
+        const poolData = await readPool(prog);
+        if (!cancelled && poolData) {
+          setTeaserPot((poolData.potPrincipalUsdc as BN) ?? new BN(0));
+        }
+      } catch {
+        if (!cancelled) setTeaserPot(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [wallet.connected]);
+
   // Detect committed → settled transition and surface DrawReveal prominently.
   useEffect(() => {
     const newStatus = currentDraw
@@ -115,7 +145,59 @@ export default function AppPage() {
         <ConnectButton />
       </div>
       {!wallet.connected ? (
-        <p className="text-zinc-400">Connect a wallet to try a deposit.</p>
+        /* Disconnected hero — pitch line + live pot teaser + prominent connect. */
+        <section className="relative overflow-hidden rounded-xl border border-border bg-card px-6 py-14 text-center sm:py-20">
+          {/* Single warm pearl halo behind the teaser. */}
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 top-1/2 mx-auto h-[22rem] w-[22rem] -translate-y-1/2 rounded-full opacity-40 blur-3xl mix-blend-screen"
+            style={{ background: "var(--gradient-halo)" }}
+          />
+          <div className="relative">
+            <h2 className="mx-auto max-w-xl text-balance text-2xl font-semibold leading-tight tracking-tight sm:text-3xl">
+              A savings account where the interest is the prize.
+            </h2>
+            <p className="mx-auto mt-4 max-w-lg text-pretty text-sm leading-relaxed text-foreground/80 sm:text-base">
+              Deposit USDC, keep your principal, and every week the pooled yield
+              becomes one winner&apos;s prize.
+            </p>
+
+            {/* Live Growing-Pot teaser (read-only) — falls back to static copy. */}
+            <div className="mx-auto mt-10 max-w-xs rounded-xl border border-border bg-background/40 p-6">
+              <div className="text-[11px] font-medium uppercase tracking-widest text-muted-foreground">
+                The pot grows forever
+              </div>
+              {teaserPot ? (
+                <>
+                  <div className="mt-2 flex items-baseline justify-center gap-1 font-mono tabular-nums">
+                    <span className="text-4xl font-bold leading-none text-accent-warm">
+                      {fmtUsdc(teaserPot)}
+                    </span>
+                    <span className="text-sm font-semibold text-muted-foreground">USDC</span>
+                  </div>
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    and climbing
+                    <span className="ml-1.5 rounded bg-secondary px-1.5 py-0.5 text-[10px] leading-tight">
+                      live estimate
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <div className="mt-3 text-sm leading-relaxed text-muted-foreground">
+                  The number only goes up — connect to see the live pot.
+                </div>
+              )}
+            </div>
+
+            {/* Prominent themed connect. */}
+            <div className="mt-10 flex justify-center">
+              <ConnectButton />
+            </div>
+            <p className="mt-3 text-xs text-muted-foreground">
+              Connect a wallet to try a deposit.
+            </p>
+          </div>
+        </section>
       ) : (
         <div className="space-y-6">
           {/* (b) Pot hero — full width */}
