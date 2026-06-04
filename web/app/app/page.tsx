@@ -5,16 +5,14 @@ import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { ConnectButton } from "@/components/connect-button";
 import { DepositCard } from "@/components/deposit-card";
 import { PositionCard } from "@/components/position-card";
-import { SimulatedDraw } from "@/components/simulated-draw";
 import { WithdrawCard } from "@/components/withdraw-card";
-import { DrawCard } from "@/components/draw-card";
+import { ThisWeek } from "@/components/this-week";
 import { DrawReveal } from "@/components/draw-reveal";
 import { ClaimCard } from "@/components/claim-card";
 import { DrawHistory } from "@/components/draw-history";
 import { ShareCard } from "@/components/share-card";
 import { PotTicker } from "@/components/pot-ticker";
 import { Leaderboard } from "@/components/leaderboard";
-import { TicketsViz } from "@/components/tickets-viz";
 import { Badges } from "@/components/badges";
 import { SecondaryTabs } from "@/components/secondary-tabs";
 import type { PositionRow } from "@/components/leaderboard";
@@ -179,8 +177,10 @@ export default function AppPage() {
 
             {/* RIGHT — draw slot (consolidated in a later task) */}
             <div className="space-y-4">
-              {/* Live draw card — reads on-chain; graceful null when no draw accounts yet */}
-              <DrawCard
+              {/* This Week — one card: live draw status/prize/countdown +
+                  your odds (computeOdds) + an inline "preview a draw" toggle.
+                  Reads on-chain; graceful null when no draw accounts yet. */}
+              <ThisWeek
                 draw={currentDraw
                   ? {
                       round: (currentDraw.round as BN).toNumber(),
@@ -191,6 +191,10 @@ export default function AppPage() {
                   : null}
                 nextDrawTs={nextDrawTs}
                 poolTotal={poolTotal}
+                myAmount={amount}
+                firstDepositTs={firstTs}
+                sumAmount={sumAmount}
+                sumAmountFirstTs={sumAmtFirstTs}
               />
 
               {/* Draw reveal — brewing/settled panel for current draw */}
@@ -246,23 +250,6 @@ export default function AppPage() {
                   />
                 ) : null;
               })()}
-
-              {/* Simulated draw — odds explainer, kept as "preview your odds" */}
-              <SimulatedDraw
-                poolTotal={poolTotal}
-                myAmount={amount}
-                firstDepositTs={firstTs}
-                sumAmount={sumAmount}
-                sumAmountFirstTs={sumAmtFirstTs}
-              />
-
-              {/* Live entries card — real on-chain odds formula, distinct from SimulatedDraw preview */}
-              <TicketsViz
-                myAmount={amount}
-                firstDepositTs={firstTs}
-                sumAmount={sumAmount}
-                sumAmountFirstTs={sumAmtFirstTs}
-              />
             </div>
           </div>
 
