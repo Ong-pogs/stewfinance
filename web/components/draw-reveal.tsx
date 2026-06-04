@@ -19,12 +19,12 @@ export function DrawReveal({ draw, walletPubkey, potUsdc, referralCode }: DrawRe
   // Brewing / committed state ─────────────────────────────────────────────────
   if (status === "committed") {
     return (
-      <div className="rounded-xl border border-yellow-800/50 p-5 animate-cauldron-bubble">
+      <div className="rounded-xl border border-border bg-card p-5 animate-cauldron-bubble">
         <div className="flex items-center gap-3">
           <span className="text-2xl" aria-hidden="true">🔮</span>
           <div>
-            <div className="text-sm font-semibold text-yellow-300">The cauldron is drawing…</div>
-            <div className="text-xs text-zinc-400 mt-0.5">
+            <div className="text-sm font-semibold text-accent-warm">The cauldron is drawing…</div>
+            <div className="text-xs text-muted-foreground mt-0.5">
               Round {draw.round} — brewing your result on-chain
             </div>
           </div>
@@ -45,15 +45,15 @@ export function DrawReveal({ draw, walletPubkey, potUsdc, referralCode }: DrawRe
     if (isWinner) {
       // Gold / elevated variant for the connected winner
       return (
-        <div className="animate-reveal-burst rounded-xl border border-yellow-500/70 bg-yellow-950/30 p-5 cauldron-glow">
-          <div className="text-xs font-semibold uppercase tracking-wider text-yellow-400 mb-1">
+        <div className="animate-reveal-burst rounded-xl border border-primary/60 bg-card p-5 cauldron-glow">
+          <div className="text-xs font-semibold uppercase tracking-wider text-accent-warm mb-1">
             You won Round {draw.round}
           </div>
-          <div className="text-3xl font-bold text-yellow-300">
-            {winnerAmt} <span className="text-base font-normal text-zinc-300">USDC</span>
+          <div className="text-3xl font-bold font-mono tabular-nums text-accent-warm">
+            {winnerAmt} <span className="text-base font-normal text-muted-foreground">USDC</span>
           </div>
-          <p className="mt-2 text-xs text-zinc-400">
-            20% fed the pot → <span className="text-purple-300 font-semibold">{potFed} USDC</span> and growing
+          <p className="mt-2 text-xs text-muted-foreground">
+            20% fed the pot → <span className="text-primary font-semibold font-mono tabular-nums">{potFed} USDC</span> and growing
           </p>
           <div className="mt-4">
             <ShareCard
@@ -71,16 +71,16 @@ export function DrawReveal({ draw, walletPubkey, potUsdc, referralCode }: DrawRe
 
     // Compact variant for non-winners
     return (
-      <div className="animate-reveal-burst rounded-xl border border-zinc-700 p-5">
-        <div className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-1">
+      <div className="animate-reveal-burst rounded-xl border border-border bg-card p-5">
+        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">
           Round {draw.round} result
         </div>
         <div className="flex items-baseline gap-2">
-          <span className="text-xl font-bold text-zinc-200">{winnerAmt}</span>
-          <span className="text-sm text-zinc-400">USDC won by {winnerDisplay}</span>
+          <span className="text-xl font-bold font-mono tabular-nums text-foreground">{winnerAmt}</span>
+          <span className="text-sm text-muted-foreground">USDC won by <span className="font-mono">{winnerDisplay}</span></span>
         </div>
-        <p className="mt-2 text-xs text-zinc-500">
-          20% fed the pot → <span className="text-purple-400">{potFed} USDC</span> and growing
+        <p className="mt-2 text-xs text-muted-foreground">
+          20% fed the pot → <span className="text-primary font-mono tabular-nums">{potFed} USDC</span> and growing
         </p>
       </div>
     );

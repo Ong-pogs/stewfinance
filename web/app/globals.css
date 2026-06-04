@@ -76,6 +76,34 @@ body {
 /* Subtle warm halo — was a loud purple glow. Much lower intensity now. */
 .cauldron-glow { box-shadow: 0 0 40px -16px var(--glow-warm); }
 
+/* ── Wallet-adapter button override ─────────────────────────────────────────
+ * The @solana/wallet-adapter-react-ui button ships its own purple/blue theme.
+ * Restyle it to match the Linen Pearl tokens (warm surface, token border,
+ * --radius, Geist font, sane height) so it reads as a quiet secondary pill. */
+.wallet-adapter-button {
+  background: var(--secondary) !important;
+  color: var(--foreground) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius) !important;
+  font-family: var(--font-geist-sans), system-ui, sans-serif !important;
+  font-size: 0.875rem !important;
+  font-weight: 500 !important;
+  height: 2.5rem !important;
+  padding: 0 1rem !important;
+  line-height: 1 !important;
+}
+.wallet-adapter-button:not([disabled]):hover {
+  background: var(--card) !important;
+  border-color: var(--primary) !important;
+}
+.wallet-adapter-button-trigger {
+  background: var(--secondary) !important;
+}
+.wallet-adapter-button .wallet-adapter-button-start-icon,
+.wallet-adapter-button .wallet-adapter-button-end-icon {
+  filter: saturate(0) brightness(1.4);
+}
+
 /* ── Pot ticker animations (warm) ──────────────────────────────────── */
 
 @keyframes odometer-roll {

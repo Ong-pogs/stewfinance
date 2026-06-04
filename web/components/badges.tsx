@@ -36,14 +36,14 @@ export function Badges({
   const badges: Badge[] = computeBadges(position, draws, null);
 
   return (
-    <div className="rounded-xl border border-zinc-800 p-5">
-      <div className="text-sm font-semibold text-zinc-300 mb-3">Achievements</div>
+    <div className="rounded-xl border border-border bg-card p-5">
+      <div className="text-sm font-semibold text-foreground mb-3">Achievements</div>
       <div className="grid grid-cols-2 gap-2">
         {badges.map((badge) => (
           <BadgePill key={badge.id} badge={badge} />
         ))}
       </div>
-      <p className="mt-3 text-[10px] text-zinc-700 leading-snug">
+      <p className="mt-3 text-[10px] text-muted-foreground leading-snug">
         Achievements are descriptive labels over on-chain facts — they do not change
         your draw weight or entries.
       </p>
@@ -55,22 +55,22 @@ function BadgePill({ badge }: { badge: Badge }) {
   if (badge.earned) {
     return (
       <div
-        className="cauldron-glow rounded-lg border border-purple-700/60 bg-purple-900/30 px-3 py-2"
+        className="rounded-lg border border-primary/50 bg-secondary px-3 py-2"
         title={badge.hint}
       >
-        <div className="text-xs font-semibold stew-accent">{badge.label}</div>
-        <div className="mt-0.5 text-[10px] text-purple-300/70 leading-snug">{badge.hint}</div>
+        <div className="text-xs font-semibold text-accent-warm">{badge.label}</div>
+        <div className="mt-0.5 text-[10px] text-muted-foreground leading-snug">{badge.hint}</div>
       </div>
     );
   }
 
   return (
     <div
-      className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2 opacity-40"
+      className="rounded-lg border border-border bg-card px-3 py-2 opacity-50"
       title={badge.hint}
     >
-      <div className="text-xs font-semibold text-zinc-500">{badge.label}</div>
-      <div className="mt-0.5 text-[10px] text-zinc-600 leading-snug">{badge.hint}</div>
+      <div className="text-xs font-semibold text-muted-foreground">{badge.label}</div>
+      <div className="mt-0.5 text-[10px] text-muted-foreground/70 leading-snug">{badge.hint}</div>
     </div>
   );
 }

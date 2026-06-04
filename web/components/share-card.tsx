@@ -46,15 +46,15 @@ export function ShareCard(props: ShareCardProps) {
       : "Tell a friend about the pool";
 
   return (
-    <div className="rounded-xl border border-purple-800/50 p-5 cauldron-glow">
-      <div className="text-sm font-semibold text-zinc-300">{heading}</div>
-      <p className="mt-1 text-xs text-zinc-500">
+    <div className="rounded-xl border border-border bg-card p-5">
+      <div className="text-sm font-semibold text-foreground">{heading}</div>
+      <p className="mt-1 text-xs text-muted-foreground">
         Referrals rank you on the board — they don&apos;t change draw odds (odds are
         size × time held, on-chain).
       </p>
       <button
         onClick={handleShare}
-        className="mt-3 w-full rounded-lg border border-purple-700 py-2 text-sm"
+        className="mt-3 w-full rounded-lg border border-border bg-transparent py-2 text-sm text-foreground"
       >
         Share on X
       </button>

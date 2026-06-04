@@ -46,19 +46,19 @@ export function DepositCard({ onDone }: { onDone: () => void }) {
   }
 
   return (
-    <div className="rounded-xl border border-zinc-800 p-5">
+    <div className="rounded-xl border border-border bg-card p-5">
       <button onClick={doFaucet} disabled={busy !== "idle"}
-        className="mb-4 w-full rounded-lg border border-purple-700 py-2 text-sm">
+        className="mb-4 w-full rounded-lg border border-border bg-transparent py-2 text-sm text-foreground disabled:opacity-50">
         {busy === "faucet" ? "Minting…" : "1. Get 100 test USDC"}
       </button>
-      <label className="text-sm text-zinc-400">2. Deposit amount (USDC)</label>
+      <label className="text-sm text-muted-foreground">2. Deposit amount (USDC)</label>
       <input value={amount} onChange={(e) => setAmount(e.target.value)} type="number"
-        className="mt-1 w-full rounded-lg bg-zinc-900 border border-zinc-700 px-3 py-2" />
+        className="mt-1 w-full rounded-lg bg-input border border-border px-3 py-2 font-mono tabular-nums text-foreground" />
       <button onClick={doDeposit} disabled={busy !== "idle"}
-        className="stew-bg mt-3 w-full rounded-lg py-3 font-semibold text-white disabled:opacity-50">
+        className="mt-3 w-full rounded-lg bg-primary py-3 font-semibold text-primary-foreground disabled:opacity-50">
         {busy === "deposit" ? "Confirming…" : "Deposit"}
       </button>
-      {err && <p className="mt-3 text-sm text-red-400">{err}</p>}
+      {err && <p className="mt-3 text-sm text-destructive">{err}</p>}
     </div>
   );
 }

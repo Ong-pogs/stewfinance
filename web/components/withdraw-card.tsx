@@ -34,13 +34,13 @@ export function WithdrawCard({ onDone }: { onDone: () => void }) {
   }
 
   return (
-    <div className="rounded-xl border border-zinc-800 p-5">
+    <div className="rounded-xl border border-border bg-card p-5">
       <button onClick={act} disabled={busy}
-        className="w-full rounded-lg border border-zinc-600 py-2 text-sm">
+        className="w-full rounded-lg border border-border bg-transparent py-2 text-sm text-foreground disabled:opacity-50">
         {busy ? "Working…" : "Request / complete withdrawal"}
       </button>
-      <p className="mt-2 text-xs text-zinc-500">No-loss: your full principal is always withdrawable (24h cooldown).</p>
-      {msg && <p className="mt-2 text-sm text-zinc-300">{msg}</p>}
+      <p className="mt-2 text-xs text-muted-foreground">No-loss: your full principal is always withdrawable (24h cooldown).</p>
+      {msg && <p className="mt-2 text-sm text-muted-foreground">{msg}</p>}
     </div>
   );
 }

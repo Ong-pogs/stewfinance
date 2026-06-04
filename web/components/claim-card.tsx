@@ -47,23 +47,23 @@ export function ClaimCard({
   }
 
   return (
-    <div className="rounded-xl border border-yellow-700/60 bg-yellow-950/20 p-5">
-      <div className="text-sm font-semibold text-yellow-300">
+    <div className="rounded-xl border border-primary/50 bg-card p-5">
+      <div className="text-sm font-semibold text-accent-warm">
         🏆 You won Round {claimable.round}!
       </div>
-      <div className="mt-1 text-2xl font-bold stew-accent">
+      <div className="mt-1 text-2xl font-bold font-mono tabular-nums text-accent-warm">
         {fmtUsdc(claimable.winnerAmount)} USDC
-        <span className="ml-2 text-xs font-normal text-zinc-500">(devnet test prize)</span>
+        <span className="ml-2 text-xs font-normal text-muted-foreground">(devnet test prize)</span>
       </div>
       <button
         onClick={handleClaim}
         disabled={claiming}
-        className="mt-4 w-full rounded-lg bg-yellow-700 py-2 text-sm font-semibold text-white disabled:opacity-50"
+        className="mt-4 w-full rounded-lg bg-primary py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"
       >
         {claiming ? "Claiming…" : `Claim ${fmtUsdc(claimable.winnerAmount)} USDC`}
       </button>
       {error && (
-        <p className="mt-2 text-xs text-red-400 break-all">{error}</p>
+        <p className="mt-2 text-xs text-destructive break-all">{error}</p>
       )}
     </div>
   );

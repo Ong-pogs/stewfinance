@@ -47,36 +47,36 @@ export function PotTicker({ pool }: { pool: PotTickerPool }) {
   const prizeFmt = fmtUsdc(new BN(estimatedPrize));
 
   return (
-    <div className="rounded-xl border border-purple-800/50 p-5 cauldron-glow">
-      <div className="text-xs font-medium uppercase tracking-widest text-purple-400 mb-1">
+    <div className="rounded-xl border border-border bg-card p-6 cauldron-glow">
+      <div className="text-[11px] font-medium uppercase tracking-widest text-muted-foreground mb-2">
         The pot grows forever
       </div>
 
       <div
-        className={`flex items-baseline gap-0.5 ${risen ? "animate-pot-rise" : "opacity-0"}`}
+        className={`flex items-baseline gap-0.5 font-mono tabular-nums ${risen ? "animate-pot-rise" : "opacity-0"}`}
       >
-        <span className="text-4xl font-bold tabular-nums text-white leading-none">
+        <span className="text-5xl font-bold text-accent-warm leading-none">
           {intPart}
         </span>
-        <span className="text-2xl font-bold tabular-nums text-purple-300 leading-none">
+        <span className="text-3xl font-bold text-accent-warm/70 leading-none">
           {decPart}
         </span>
-        <span className="ml-1 text-sm font-semibold text-purple-400">USDC</span>
+        <span className="ml-1.5 text-sm font-semibold text-muted-foreground">USDC</span>
       </div>
 
-      <div className="mt-1 flex items-center gap-1.5">
-        <span className="text-xs text-zinc-500">
-          Pot: {fmtUsdc(pool.potPrincipalUsdc)} USDC and climbing
+      <div className="mt-2 flex items-center gap-1.5">
+        <span className="text-xs text-muted-foreground">
+          and climbing — the interest is the prize
         </span>
-        <span className="rounded bg-purple-900/50 px-1 py-0.5 text-[10px] text-purple-400 leading-tight">
+        <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground leading-tight">
           live estimate
         </span>
       </div>
 
       {estimatedPrize > 0 && (
-        <div className="mt-3 border-t border-zinc-800 pt-3 text-xs text-zinc-400">
-          ~{prizeFmt} USDC estimated draw prize this week
-          <span className="ml-1 text-zinc-600">(illustration only)</span>
+        <div className="mt-4 border-t border-border pt-3 text-xs text-muted-foreground">
+          ~<span className="font-mono tabular-nums">{prizeFmt}</span> USDC estimated draw prize this week
+          <span className="ml-1 text-muted-foreground/60">(illustration only)</span>
         </div>
       )}
     </div>

@@ -73,18 +73,18 @@ export function Leaderboard({
   // ── Render helpers ────────────────────────────────────────────────────────
 
   function rowClass(mine: boolean) {
-    return `flex items-center justify-between py-2 border-b border-zinc-800/50 last:border-0 text-sm ${
-      mine ? "text-purple-300 font-semibold" : "text-zinc-300"
+    return `flex items-center justify-between py-2 border-b border-border last:border-0 text-sm ${
+      mine ? "text-accent-warm font-semibold" : "text-foreground"
     }`;
   }
 
   function emptyState(msg: string) {
-    return <p className="py-4 text-center text-sm text-zinc-500">{msg}</p>;
+    return <p className="py-4 text-center text-sm text-muted-foreground">{msg}</p>;
   }
 
   return (
-    <div className="rounded-xl border border-zinc-800 p-5">
-      <div className="text-sm font-semibold text-zinc-300 mb-3">Leaderboard</div>
+    <div className="rounded-xl border border-border bg-card p-5">
+      <div className="text-sm font-semibold text-foreground mb-3">Leaderboard</div>
 
       {/* Tab bar */}
       <div className="flex gap-1 mb-4">
@@ -94,8 +94,8 @@ export function Leaderboard({
             onClick={() => setTab(t)}
             className={`flex-1 rounded-md py-1 text-xs font-medium transition-colors ${
               tab === t
-                ? "bg-purple-800/60 text-purple-200"
-                : "text-zinc-500 hover:text-zinc-300"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground"
             }`}
           >
             {TAB_LABELS[t]}
@@ -111,20 +111,20 @@ export function Leaderboard({
             : byAmount.map((p, i) => (
                 <div key={p.user.toBase58()} className={rowClass(isMe(p.user))}>
                   <span className="flex items-center gap-2">
-                    <span className="w-5 text-right text-zinc-600 text-xs tabular-nums">
+                    <span className="w-5 text-right text-muted-foreground text-xs tabular-nums">
                       {i + 1}
                     </span>
                     <span className="font-mono">
                       {abbrev(p.user)}
                       {isMe(p.user) && (
-                        <span className="ml-1 text-[10px] text-purple-400">(you)</span>
+                        <span className="ml-1 text-[10px] text-primary">(you)</span>
                       )}
                     </span>
                   </span>
                   <span className="font-mono tabular-nums">{fmtUsdc(p.amount)} USDC</span>
                 </div>
               ))}
-          <p className="mt-2 text-[10px] text-zinc-600">
+          <p className="mt-2 text-[10px] text-muted-foreground">
             Ranked by pool balance. Position size and time held determine draw weight — not rank.
           </p>
         </div>
@@ -140,13 +140,13 @@ export function Leaderboard({
                 return (
                   <div key={p.user.toBase58()} className={rowClass(isMe(p.user))}>
                     <span className="flex items-center gap-2">
-                      <span className="w-5 text-right text-zinc-600 text-xs tabular-nums">
+                      <span className="w-5 text-right text-muted-foreground text-xs tabular-nums">
                         {i + 1}
                       </span>
                       <span className="font-mono">
                         {abbrev(p.user)}
                         {isMe(p.user) && (
-                          <span className="ml-1 text-[10px] text-purple-400">(you)</span>
+                          <span className="ml-1 text-[10px] text-primary">(you)</span>
                         )}
                       </span>
                     </span>
@@ -156,7 +156,7 @@ export function Leaderboard({
                   </div>
                 );
               })}
-          <p className="mt-2 text-[10px] text-zinc-600">
+          <p className="mt-2 text-[10px] text-muted-foreground">
             Ranked by weeks held. Time in pool increases your draw weight on-chain.
           </p>
         </div>
@@ -166,7 +166,7 @@ export function Leaderboard({
       {tab === "referrals" && (
         <div>
           {refLoading ? (
-            <p className="py-4 text-center text-sm text-zinc-500">Loading…</p>
+            <p className="py-4 text-center text-sm text-muted-foreground">Loading…</p>
           ) : refEntries.length === 0 ? (
             emptyState("No referrals recorded yet.")
           ) : (
@@ -176,24 +176,24 @@ export function Leaderboard({
                 className={rowClass(isMyRef(e.ref))}
               >
                 <span className="flex items-center gap-2">
-                  <span className="w-5 text-right text-zinc-600 text-xs tabular-nums">
+                  <span className="w-5 text-right text-muted-foreground text-xs tabular-nums">
                     {i + 1}
                   </span>
                   <span className="font-mono">
                     {abbrev(e.ref)}
                     {isMyRef(e.ref) && (
-                      <span className="ml-1 text-[10px] text-purple-400">(you)</span>
+                      <span className="ml-1 text-[10px] text-primary">(you)</span>
                     )}
                   </span>
                 </span>
-                <span className="text-zinc-400">
+                <span className="text-muted-foreground">
                   {e.uniqueWallets}{" "}
                   {e.uniqueWallets === 1 ? "depositor brought" : "depositors brought"}
                 </span>
               </div>
             ))
           )}
-          <p className="mt-2 text-[10px] text-zinc-600">
+          <p className="mt-2 text-[10px] text-muted-foreground">
             Referrals do not change draw odds — odds are size × time held, on-chain.
           </p>
         </div>
