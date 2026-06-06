@@ -1,16 +1,11 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { AnchorProvider, BN, Program } from "@coral-xyz/anchor";
-import { Connection, PublicKey } from "@solana/web3.js";
+import { useEffect } from "react";
 import { track } from "@/lib/track";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Faq } from "@/components/faq";
 import { HowItWorksInteractive } from "@/components/how-it-works-interactive";
-import { STEWFI_IDL, Stewfi } from "@/lib/idl";
-import { listDraws } from "@/lib/stewfi";
-import { fmtUsdc, abbrev } from "@/lib/format";
-import { RPC_URL } from "@/lib/constants";
+import { WinnerCarousel } from "@/components/winner-carousel";
 
 const STEPS = [
   {
@@ -70,7 +65,7 @@ export default function Home() {
             becomes one winner&apos;s prize. No loss, all upside.
           </p>
 
-          <WinnerSpotlight />
+          <WinnerCarousel />
 
           <div className="mt-10 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
             <Link
@@ -141,70 +136,5 @@ export default function Home() {
       {/* FAQ — honest Q&A, native details/summary, on-theme. */}
       <Faq />
     </main>
-  );
-}
-
-/**
- * WinnerSpotlight — social-proof of the most recent real winner, in the hero.
- *
- * Reads on-chain with a WALLET-LESS AnchorProvider (same read-only pattern as
- * /verify and /stats), so it works disconnected. Picks the newest settled (or
- * claimed) draw that has a real winner. Renders nothing on no settled draw or
- * any read failure — purely additive, never blocks the hero. Pure presentation
- * of a fact the chain already proved: no contract / odds / tracking changes.
- */
-function WinnerSpotlight() {
-  const [winner, setWinner] = useState<{ addr: string; amount: BN } | null>(
-    null,
-  );
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const conn = new Connection(RPC_URL, "confirmed");
-        const provider = new AnchorProvider(
-          conn,
-          // Read-only: never signs, only satisfies the provider type.
-          { publicKey: PublicKey.default } as AnchorProvider["wallet"],
-          { commitment: "confirmed" },
-        );
-        const program = new Program<Stewfi>(STEWFI_IDL, provider);
-
-        // listDraws is sorted by round descending → first real winner is newest.
-        const draws = await listDraws(program);
-        const latest = draws.find(
-          (d) =>
-            (d.status === "settled" || d.status === "claimed") &&
-            !d.winner.equals(PublicKey.default) &&
-            d.winnerAmount.gtn(0),
-        );
-        if (!cancelled && latest) {
-          setWinner({ addr: latest.winner.toBase58(), amount: latest.winnerAmount });
-        }
-      } catch {
-        // Graceful: leave the spotlight unrendered on any read failure.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (!winner) return null;
-
-  return (
-    <p className="mx-auto mt-6 inline-flex max-w-full flex-wrap items-center justify-center gap-x-1.5 rounded-full border border-border bg-card/60 px-4 py-2 text-sm text-foreground/80 backdrop-blur">
-      <span aria-hidden="true">🏆</span>
-      <span>Last winner</span>
-      <span className="font-mono tabular-nums text-foreground">
-        {abbrev(winner.addr)}
-      </span>
-      <span>won</span>
-      <span className="font-mono font-semibold tabular-nums text-accent-warm">
-        {fmtUsdc(winner.amount)} USDC
-      </span>
-      <span className="text-muted-foreground">— principal never moved.</span>
-    </p>
   );
 }

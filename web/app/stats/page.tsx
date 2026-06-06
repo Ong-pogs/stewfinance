@@ -15,7 +15,7 @@
  *   3. A "Pot growth" readout: cumulative growing-pot contributions over rounds.
  *   4. EmptyState (live tiles only) when there are no settled draws.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AnchorProvider, BN, Program } from "@coral-xyz/anchor";
 import { Connection, PublicKey } from "@solana/web3.js";
 import Link from "next/link";
@@ -177,6 +177,9 @@ export default function StatsPage() {
           )}
         </div>
       )}
+
+      {/* Embed-this affordance — copyable iframe snippet for the pot widget */}
+      <EmbedThis />
 
       {/* Honest caption (once) */}
       <footer className="mt-10 rounded-xl border border-border bg-card/60 p-5 text-xs leading-relaxed text-muted-foreground">
@@ -373,6 +376,60 @@ function Legend({ swatch, label }: { swatch: string; label: string }) {
       </svg>
       {label}
     </span>
+  );
+}
+
+// ── "Embed this" — copyable iframe snippet for the chrome-less /embed/pot widget
+function EmbedThis() {
+  const [origin, setOrigin] = useState("");
+  const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Resolve the origin client-side so the snippet is copy-paste ready.
+  useEffect(() => {
+    setOrigin(window.location.origin);
+    return () => {
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+    };
+  }, []);
+
+  const src = `${origin || "https://your-stewfi-host"}/embed/pot`;
+  const snippet = `<iframe src="${src}" width="320" height="180" style="border:0;border-radius:12px" title="StewFi Growing Pot" loading="lazy"></iframe>`;
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(snippet);
+      setCopied(true);
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+      copiedTimer.current = setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // Clipboard blocked (e.g. insecure context): the field is selectable, so
+      // the user can still copy manually.
+    }
+  };
+
+  return (
+    <section
+      aria-label="Embed the Growing Pot widget"
+      className="mt-8 rounded-xl border border-border bg-card p-5"
+    >
+      <div className="flex items-baseline justify-between gap-3">
+        <h3 className="text-sm font-semibold text-foreground">Embed the pot</h3>
+        <button
+          type="button"
+          onClick={copy}
+          className="rounded-lg border border-border bg-secondary px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-primary"
+        >
+          {copied ? "Copied ✓" : "Copy"}
+        </button>
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Drop the live Growing Pot on any site — it reads straight from chain.
+      </p>
+      <code className="mt-3 block w-full select-all overflow-x-auto whitespace-pre rounded-lg bg-secondary px-3 py-2 font-mono text-[11px] leading-relaxed text-foreground">
+        {snippet}
+      </code>
+    </section>
   );
 }
 
