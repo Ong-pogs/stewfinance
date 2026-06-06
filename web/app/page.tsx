@@ -77,6 +77,13 @@ export default function Home() {
               Verify draws
               <span aria-hidden="true">↗</span>
             </Link>
+            <Link
+              href="/stats"
+              className="inline-flex items-center gap-2 rounded-lg border border-border bg-card/60 px-8 py-4 font-semibold text-foreground backdrop-blur transition-colors hover:border-primary"
+            >
+              Pool stats
+              <span aria-hidden="true">↗</span>
+            </Link>
           </div>
         </div>
       </section>

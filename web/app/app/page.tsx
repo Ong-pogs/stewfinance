@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnchorProvider, BN, Program } from "@coral-xyz/anchor";
 import { Connection, PublicKey } from "@solana/web3.js";
@@ -163,6 +164,12 @@ export default function AppPage() {
           <span className="bg-[image:--gradient-text] bg-clip-text text-transparent">StewFi</span>
         </h1>
         <div className="flex items-center gap-2">
+          <Link
+            href="/stats"
+            className="hidden rounded-lg border border-border bg-secondary px-3 py-2 text-sm font-medium text-foreground transition-colors hover:border-primary sm:inline-block"
+          >
+            Pool stats
+          </Link>
           <ThemeToggle />
           <ConnectButton />
         </div>
