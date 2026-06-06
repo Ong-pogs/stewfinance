@@ -6,6 +6,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { track } from "@/lib/track";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Faq } from "@/components/faq";
+import { HowItWorksInteractive } from "@/components/how-it-works-interactive";
 import { STEWFI_IDL, Stewfi } from "@/lib/idl";
 import { listDraws } from "@/lib/stewfi";
 import { fmtUsdc, abbrev } from "@/lib/format";
@@ -131,6 +132,11 @@ export default function Home() {
           ))}
         </ol>
       </section>
+
+      {/* How the winner is picked — interactive size × time explainer. */}
+      <div className="border-t border-border">
+        <HowItWorksInteractive />
+      </div>
 
       {/* FAQ — honest Q&A, native details/summary, on-theme. */}
       <Faq />

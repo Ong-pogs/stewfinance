@@ -45,6 +45,38 @@ export function computeOdds({
 }
 
 /**
+ * Illustrative size × time odds for the "how the winner is picked" explainer.
+ *
+ * Same SHAPE as the on-chain formula `computeOdds` uses:
+ *   weight = deposit_size × time_held   (here: USDC × days, plain numbers)
+ *   odds   = your weight ÷ (your weight + Σ others' weights)
+ *
+ * This is intentionally a plain-number version against a fixed SAMPLE pool —
+ * it is for an honest *illustration only* (the real odds come from the live
+ * on-chain pool via `computeOdds`). Values are small and bounded, so JS
+ * numbers are exact here. No BN, no chain reads.
+ *
+ * @param mySize    your deposit in USDC (e.g. 10..5000)
+ * @param myDays    days held (e.g. 0..30)
+ * @param others    the fixed sample depositors { size (USDC), days }
+ * @returns myWeight, totalWeight (you + others), and oddsPct (0..100)
+ */
+export function illustrativeOdds(
+  mySize: number,
+  myDays: number,
+  others: { size: number; days: number }[],
+): { myWeight: number; totalWeight: number; oddsPct: number } {
+  const myWeight = Math.max(0, mySize) * Math.max(0, myDays);
+  const othersWeight = others.reduce(
+    (acc, o) => acc + Math.max(0, o.size) * Math.max(0, o.days),
+    0,
+  );
+  const totalWeight = myWeight + othersWeight;
+  const oddsPct = totalWeight <= 0 ? 0 : (myWeight / totalWeight) * 100;
+  return { myWeight, totalWeight, oddsPct };
+}
+
+/**
  * Compute the winning ticket EXACTLY as the on-chain program does.
  *
  * Mirrors programs/stewfi/src/lib.rs settle_draw (and app/crank/positions.ts

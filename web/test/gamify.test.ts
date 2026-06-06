@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { BN } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
-import { computeOdds, weeksHeld, potEstimate, computeStreak, computeBadges, poolMemberSubset, computeTicket } from "../lib/gamify";
+import { computeOdds, illustrativeOdds, weeksHeld, potEstimate, computeStreak, computeBadges, poolMemberSubset, computeTicket } from "../lib/gamify";
 import type { DrawSummary } from "../lib/stewfi";
 
 // ── Regression: computeOdds must reproduce simulated-draw.tsx numbers ────────
@@ -90,6 +90,74 @@ describe("computeOdds", () => {
     });
     expect(ageSecs).toBe(0);
     expect(oddsPct).toBe(0);
+  });
+});
+
+// ── illustrativeOdds ──────────────────────────────────────────────────────────
+// Plain-number size × time helper backing the "how the winner is picked"
+// explainer. Same shape as computeOdds: weight = size × time, odds = mine ÷ total.
+describe("illustrativeOdds", () => {
+  // A small fixed sample pool used by the explainer widget.
+  const sample = [
+    { size: 250, days: 20 }, // weight 5000
+    { size: 500, days: 4 },  // weight 2000
+    { size: 50, days: 30 },  // weight 1500
+  ]; // others' total weight = 8500
+
+  it("weight = size × time", () => {
+    const { myWeight } = illustrativeOdds(100, 10, sample);
+    expect(myWeight).toBe(1000);
+  });
+
+  it("totalWeight = your weight + sample others", () => {
+    const { totalWeight } = illustrativeOdds(100, 10, sample);
+    expect(totalWeight).toBe(1000 + 8500);
+  });
+
+  it("odds = your weight ÷ total weight (as a percent)", () => {
+    const { oddsPct } = illustrativeOdds(100, 10, sample);
+    expect(oddsPct).toBeCloseTo((1000 / 9500) * 100, 8);
+  });
+
+  it("bigger deposit raises odds (size lever)", () => {
+    const small = illustrativeOdds(100, 10, sample).oddsPct;
+    const big = illustrativeOdds(1000, 10, sample).oddsPct;
+    expect(big).toBeGreaterThan(small);
+  });
+
+  it("holding longer raises odds (time lever)", () => {
+    const short = illustrativeOdds(100, 5, sample).oddsPct;
+    const long = illustrativeOdds(100, 25, sample).oddsPct;
+    expect(long).toBeGreaterThan(short);
+  });
+
+  it("equal weight from either lever gives equal odds (size×time symmetry)", () => {
+    // 200×10 and 100×20 both yield weight 2000 → identical odds.
+    const a = illustrativeOdds(200, 10, sample).oddsPct;
+    const b = illustrativeOdds(100, 20, sample).oddsPct;
+    expect(a).toBeCloseTo(b, 10);
+  });
+
+  it("zero time held → zero weight → zero odds", () => {
+    const { myWeight, oddsPct } = illustrativeOdds(5000, 0, sample);
+    expect(myWeight).toBe(0);
+    expect(oddsPct).toBe(0);
+  });
+
+  it("sole depositor (no others) has 100% odds", () => {
+    const { oddsPct } = illustrativeOdds(100, 10, []);
+    expect(oddsPct).toBeCloseTo(100, 10);
+  });
+
+  it("empty pool entirely (you have zero weight) returns 0, no divide-by-zero", () => {
+    const { oddsPct, totalWeight } = illustrativeOdds(0, 0, []);
+    expect(totalWeight).toBe(0);
+    expect(oddsPct).toBe(0);
+  });
+
+  it("clamps negative inputs to zero weight", () => {
+    expect(illustrativeOdds(-100, 10, sample).myWeight).toBe(0);
+    expect(illustrativeOdds(100, -10, sample).myWeight).toBe(0);
   });
 });
 
