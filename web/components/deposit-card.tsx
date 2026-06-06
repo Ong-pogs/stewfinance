@@ -1,9 +1,10 @@
 "use client";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
+import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { getProgram, deposit } from "@/lib/stewfi";
 import { toBaseUnits } from "@/lib/format";
-import { MIN_DEPOSIT_UI, MAX_DEPOSIT_UI } from "@/lib/constants";
+import { MIN_DEPOSIT_UI, MAX_DEPOSIT_UI, USDC_MINT } from "@/lib/constants";
 import { track } from "@/lib/track";
 import { useToast } from "@/components/toast";
 
@@ -14,6 +15,38 @@ export function DepositCard({ onDone }: { onDone: () => void }) {
   const [amount, setAmount] = useState("50");
   const [busy, setBusy] = useState<"idle" | "faucet" | "deposit">("idle");
   const [err, setErr] = useState<string | null>(null);
+  // Connected wallet's test-USDC balance (UI units). null = not yet read.
+  const [balance, setBalance] = useState<number | null>(null);
+
+  // Read the connected wallet's test-USDC ATA balance. Never throws:
+  // no ATA / RPC hiccup → balance 0 so the UI degrades gracefully.
+  const refreshBalance = useCallback(async () => {
+    if (!wallet.publicKey) {
+      setBalance(null);
+      return;
+    }
+    try {
+      const ata = getAssociatedTokenAddressSync(USDC_MINT, wallet.publicKey);
+      const res = await connection.getTokenAccountBalance(ata);
+      setBalance(res.value.uiAmount ?? 0);
+    } catch {
+      // Most common cause: the ATA doesn't exist yet (never received USDC).
+      setBalance(0);
+    }
+  }, [connection, wallet.publicKey]);
+
+  useEffect(() => {
+    refreshBalance();
+  }, [refreshBalance]);
+
+  const canMax = balance !== null && balance >= MIN_DEPOSIT_UI;
+  function setMax() {
+    if (balance === null) return;
+    const target = Math.min(balance, MAX_DEPOSIT_UI);
+    // Trim to whole-cent precision to match USDC's 6-decimal base units.
+    setAmount(String(Math.floor(target * 100) / 100));
+    setErr(null);
+  }
 
   async function doFaucet() {
     if (!wallet.publicKey) return;
@@ -36,6 +69,7 @@ export function DepositCard({ onDone }: { onDone: () => void }) {
         description: "Test-only tokens, minted to your wallet on devnet.",
         txSig: typeof r.sig === "string" ? r.sig : undefined,
       });
+      refreshBalance();
     } catch (e) {
       const msg = (e as Error).message;
       setErr(msg);
@@ -67,6 +101,7 @@ export function DepositCard({ onDone }: { onDone: () => void }) {
         description: "Your principal stays yours and is always withdrawable.",
         txSig: sig,
       });
+      refreshBalance();
       onDone();
     } catch (e) {
       const msg = (e as Error).message;
@@ -82,9 +117,31 @@ export function DepositCard({ onDone }: { onDone: () => void }) {
         className="mb-4 w-full rounded-lg border border-border bg-transparent py-2 text-sm text-foreground disabled:opacity-50">
         {busy === "faucet" ? "Minting…" : "1. Get 100 test USDC"}
       </button>
-      <label className="text-sm text-muted-foreground">2. Deposit amount (USDC)</label>
-      <input value={amount} onChange={(e) => setAmount(e.target.value)} type="number"
-        className="mt-1 w-full rounded-lg bg-input border border-border px-3 py-2 font-mono tabular-nums text-foreground" />
+      <div className="flex items-baseline justify-between">
+        <label className="text-sm text-muted-foreground">2. Deposit amount (USDC)</label>
+        <span className="text-xs text-muted-foreground">
+          Balance:{" "}
+          <span className="font-mono tabular-nums text-foreground">
+            {balance === null ? "—" : balance.toLocaleString("en-US", { maximumFractionDigits: 2 })}
+          </span>{" "}
+          USDC
+        </span>
+      </div>
+      <div className="relative mt-1">
+        <input value={amount} onChange={(e) => setAmount(e.target.value)} type="number"
+          className="w-full rounded-lg bg-input border border-border px-3 py-2 pr-16 font-mono tabular-nums text-foreground" />
+        <button
+          type="button"
+          onClick={setMax}
+          disabled={!canMax || busy !== "idle"}
+          title={canMax ? undefined : "get test USDC first"}
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md border border-border bg-transparent px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40">
+          Max
+        </button>
+      </div>
+      {balance !== null && !canMax && (
+        <p className="mt-1 text-xs text-muted-foreground">get test USDC first</p>
+      )}
       <button onClick={doDeposit} disabled={busy !== "idle"}
         className="mt-3 w-full rounded-lg bg-primary py-3 font-semibold text-primary-foreground disabled:opacity-50">
         {busy === "deposit" ? "Confirming…" : "Deposit"}
