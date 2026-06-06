@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { BN } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
-import { computeOdds, illustrativeOdds, weeksHeld, potEstimate, computeStreak, computeBadges, poolMemberSubset, computeTicket } from "../lib/gamify";
+import { computeOdds, projectOdds, illustrativeOdds, weeksHeld, potEstimate, computeStreak, computeBadges, poolMemberSubset, computeTicket } from "../lib/gamify";
 import type { DrawSummary } from "../lib/stewfi";
 
 // ── Regression: computeOdds must reproduce simulated-draw.tsx numbers ────────
@@ -90,6 +90,92 @@ describe("computeOdds", () => {
     });
     expect(ageSecs).toBe(0);
     expect(oddsPct).toBe(0);
+  });
+});
+
+// ── projectOdds ───────────────────────────────────────────────────────────────
+// A forward PROJECTION (not history): holds the pool fixed and advances ts day by
+// day, reusing computeOdds at each future timestamp. A lone-ish holder older than
+// the pool average should see their share rise monotonically over the horizon.
+describe("projectOdds", () => {
+  const nowTs = 1_717_000_000;
+  const days = 14;
+
+  // My position: 500 USDC held 5 days, against a 1000 USDC block held 40 days.
+  // The others are OLDER, so their weight grew off a head start; as both age,
+  // the time-held ratio (t − othersTs)/(t − myTs) drifts down toward 1, so my
+  // share of size×time weight CLIMBS over the horizon (a younger-than-average
+  // holder catching up). This is the realistic "your odds rise as you hold" case.
+  const myAmount = new BN(500_000_000);
+  const myFirstTs = new BN(nowTs - 5 * 86_400);
+  const other = new BN(1_000_000_000);
+  const otherFirstTs = new BN(nowTs - 40 * 86_400);
+  const sumAmount = myAmount.add(other);
+  const sumAmountFirstTs = myAmount.mul(myFirstTs).add(other.mul(otherFirstTs));
+
+  it("returns one point per day, inclusive of day 0 (days+1 points)", () => {
+    const series = projectOdds({ myAmount, firstDepositTs: myFirstTs, sumAmount, sumAmountFirstTs, nowTs, days });
+    expect(series).toHaveLength(days + 1);
+    expect(series[0].day).toBe(0);
+    expect(series[series.length - 1].day).toBe(days);
+  });
+
+  it("day 0 equals computeOdds at nowTs (consistent anchor)", () => {
+    const series = projectOdds({ myAmount, firstDepositTs: myFirstTs, sumAmount, sumAmountFirstTs, nowTs, days });
+    const live = computeOdds({ myAmount, firstDepositTs: myFirstTs, sumAmount, sumAmountFirstTs, nowTs });
+    expect(series[0].oddsPct).toBeCloseTo(live.oddsPct, 8);
+  });
+
+  it("rises monotonically for an older-than-average holder", () => {
+    const series = projectOdds({ myAmount, firstDepositTs: myFirstTs, sumAmount, sumAmountFirstTs, nowTs, days });
+    for (let i = 1; i < series.length; i++) {
+      expect(series[i].oddsPct).toBeGreaterThanOrEqual(series[i - 1].oddsPct);
+    }
+    // And it actually moved up over the horizon (not flat).
+    expect(series[series.length - 1].oddsPct).toBeGreaterThan(series[0].oddsPct);
+  });
+
+  it("a lone holder projects to 100% and stays bounded ≤ 100", () => {
+    const soleSum = myAmount;
+    const soleSumFirstTs = myAmount.mul(myFirstTs);
+    const series = projectOdds({ myAmount, firstDepositTs: myFirstTs, sumAmount: soleSum, sumAmountFirstTs: soleSumFirstTs, nowTs, days });
+    for (const pt of series) {
+      expect(pt.oddsPct).toBeGreaterThanOrEqual(0);
+      expect(pt.oddsPct).toBeLessThanOrEqual(100);
+      expect(pt.oddsPct).toBeCloseTo(100, 5);
+    }
+  });
+
+  it("every point stays within sane bounds 0..100", () => {
+    const series = projectOdds({ myAmount, firstDepositTs: myFirstTs, sumAmount, sumAmountFirstTs, nowTs, days });
+    for (const pt of series) {
+      expect(pt.oddsPct).toBeGreaterThanOrEqual(0);
+      expect(pt.oddsPct).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it("null-safe — missing any field returns an empty array", () => {
+    const base = { firstDepositTs: myFirstTs, sumAmount, sumAmountFirstTs, nowTs, days };
+    expect(projectOdds({ ...base, myAmount: null })).toEqual([]);
+    expect(projectOdds({ myAmount, sumAmount, sumAmountFirstTs, nowTs, days, firstDepositTs: null })).toEqual([]);
+    expect(projectOdds({ myAmount, firstDepositTs: myFirstTs, sumAmountFirstTs, nowTs, days, sumAmount: null })).toEqual([]);
+    expect(projectOdds({ myAmount, firstDepositTs: myFirstTs, sumAmount, nowTs, days, sumAmountFirstTs: null })).toEqual([]);
+  });
+
+  it("no position (amount ≤ 0) projects flat zeros across the horizon", () => {
+    const series = projectOdds({ myAmount: new BN(0), firstDepositTs: myFirstTs, sumAmount, sumAmountFirstTs, nowTs, days });
+    expect(series).toHaveLength(days + 1);
+    expect(series.every((p) => p.oddsPct === 0)).toBe(true);
+  });
+
+  it("negative days returns an empty array", () => {
+    expect(projectOdds({ myAmount, firstDepositTs: myFirstTs, sumAmount, sumAmountFirstTs, nowTs, days: -1 })).toEqual([]);
+  });
+
+  it("days = 0 returns a single point (day 0 only)", () => {
+    const series = projectOdds({ myAmount, firstDepositTs: myFirstTs, sumAmount, sumAmountFirstTs, nowTs, days: 0 });
+    expect(series).toHaveLength(1);
+    expect(series[0].day).toBe(0);
   });
 });
 

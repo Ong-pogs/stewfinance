@@ -6,6 +6,7 @@ import { DrawSummary } from "@/lib/stewfi";
 import { abbrev, fmtUsdc } from "@/lib/format";
 import { computeOdds, weeksHeld } from "@/lib/gamify";
 import { EmptyState } from "@/components/empty-state";
+import { OddsProjection } from "@/components/odds-projection";
 import type { ActivityEvent } from "@/app/api/activity/route";
 
 /**
@@ -154,6 +155,17 @@ export function YourActivity({
                     {" current draw weight share"}
                   </span>
                 )}
+              </div>
+
+              {/* Projected draw-weight share over the next ~14 days — a
+                  PROJECTION (pool held fixed), clearly labelled, not history. */}
+              <div className="mt-4 rounded-lg border border-border bg-secondary/40 p-3">
+                <OddsProjection
+                  myAmount={amount}
+                  firstDepositTs={firstDepositTs}
+                  sumAmount={sumAmount}
+                  sumAmountFirstTs={sumAmountFirstTs}
+                />
               </div>
             </div>
           )}

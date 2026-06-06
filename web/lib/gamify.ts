@@ -45,6 +45,64 @@ export function computeOdds({
 }
 
 /**
+ * Project how your draw-weight share grows over the coming days IF the pool
+ * stays unchanged.
+ *
+ * This is a PROJECTION, not history — the chain stores no odds-history. The
+ * reasoning: your weight = amount × (ts − first_deposit_ts), so as your deposit
+ * ages your weight rises; meanwhile the pool's total weight also rises with ts.
+ * Net effect for a position older than the pool average is that your share
+ * drifts up over time. We hold `myAmount`, `sumAmount`, and `sumAmountFirstTs`
+ * FIXED (the "pool stays the same" assumption) and only advance `ts`.
+ *
+ * Uses the exact same BN math as `computeOdds` at each future timestamp:
+ *   future ts   = nowTs + d × 86400          (d = 0..days)
+ *   myWeight    = myAmount × (ts − firstDepositTs)
+ *   totalWeight = ts × sumAmount − sumAmountFirstTs
+ *   odds        = myWeight ÷ totalWeight     (clamped 0..100)
+ *
+ * No BigInt literals (web tsconfig target rejects them). Null-safe: any missing
+ * field, a non-positive `days`, or no position → empty array.
+ *
+ * @returns one point per day, `{ day: 0..days, oddsPct: 0..100 }`.
+ */
+export function projectOdds({
+  myAmount,
+  firstDepositTs,
+  sumAmount,
+  sumAmountFirstTs,
+  nowTs,
+  days,
+}: {
+  myAmount: BN | null | undefined;
+  firstDepositTs: BN | null | undefined;
+  sumAmount: BN | null | undefined;
+  sumAmountFirstTs: BN | null | undefined;
+  nowTs: number; // unix seconds
+  days: number; // project this many days forward (inclusive of day 0)
+}): { day: number; oddsPct: number }[] {
+  if (!myAmount || !firstDepositTs || !sumAmount || !sumAmountFirstTs) return [];
+  if (!Number.isFinite(days) || days < 0) return [];
+  // No real position → flat zeros across the horizon (caller hides the chart).
+  if (myAmount.lten(0)) {
+    return Array.from({ length: days + 1 }, (_, d) => ({ day: d, oddsPct: 0 }));
+  }
+
+  const out: { day: number; oddsPct: number }[] = [];
+  for (let d = 0; d <= days; d++) {
+    const { oddsPct } = computeOdds({
+      myAmount,
+      firstDepositTs,
+      sumAmount,
+      sumAmountFirstTs,
+      nowTs: nowTs + d * 86_400,
+    });
+    out.push({ day: d, oddsPct });
+  }
+  return out;
+}
+
+/**
  * Illustrative size × time odds for the "how the winner is picked" explainer.
  *
  * Same SHAPE as the on-chain formula `computeOdds` uses:
