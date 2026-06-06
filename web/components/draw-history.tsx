@@ -1,14 +1,30 @@
 "use client";
+import Link from "next/link";
 import { DrawSummary } from "@/lib/stewfi";
 import { fmtUsdc, abbrev } from "@/lib/format";
 import { statusLabel } from "@/lib/draw-utils";
 import { EmptyState } from "@/components/empty-state";
 
+/** "Provably fair" link to the /verify page — shown in the draw-history header. */
+function VerifyLink() {
+  return (
+    <Link
+      href="/verify"
+      className="text-xs font-medium text-primary underline decoration-border underline-offset-2 hover:text-accent-warm"
+    >
+      Provably fair ↗
+    </Link>
+  );
+}
+
 export function DrawHistory({ draws }: { draws: DrawSummary[] }) {
   if (draws.length === 0) {
     return (
       <div className="rounded-xl border border-border bg-card p-5">
-        <div className="text-sm font-semibold text-foreground mb-2">Draw history</div>
+        <div className="mb-2 flex items-center justify-between">
+          <div className="text-sm font-semibold text-foreground">Draw history</div>
+          <VerifyLink />
+        </div>
         <EmptyState
           icon="🎲"
           title="No draws yet"
@@ -21,7 +37,10 @@ export function DrawHistory({ draws }: { draws: DrawSummary[] }) {
 
   return (
     <div className="rounded-xl border border-border bg-card p-5">
-      <div className="text-sm font-semibold text-foreground mb-3">Draw history</div>
+      <div className="mb-3 flex items-center justify-between">
+        <div className="text-sm font-semibold text-foreground">Draw history</div>
+        <VerifyLink />
+      </div>
       {/* Low-value columns (Pot fed / Winner / Claimed) collapse under `sm` so
           the table never needs horizontal scroll on a phone. */}
       <table className="w-full text-xs text-left">

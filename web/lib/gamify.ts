@@ -45,6 +45,38 @@ export function computeOdds({
 }
 
 /**
+ * Compute the winning ticket EXACTLY as the on-chain program does.
+ *
+ * Mirrors programs/stewfi/src/lib.rs settle_draw (and app/crank/positions.ts
+ * computeWinner):
+ *   ticket = u128(random_value[0..16] little-endian) % total_weight
+ *
+ * The winner is then the position whose cumulative-weight window
+ * [cum_before, cum_before + weight) contains this ticket, where each position's
+ * weight = amount × (draw_ts − first_deposit_ts). This helper computes only the
+ * ticket — the windowing is read straight from the settled Draw account
+ * (`winner`) since the chain already proved it.
+ *
+ * Uses BN throughout (no BigInt literals — the web tsconfig target rejects
+ * them). `new BN(buf, "le")` is always non-negative, so `.mod()` is safe.
+ *
+ * @param randomValue the 32 revealed VRF bytes from the Draw account
+ * @param totalWeight the on-chain total_weight snapshotted at commit
+ * @returns the winning ticket as a BN (0 ≤ ticket < totalWeight), or 0 when
+ *          totalWeight ≤ 0 (no entries) — callers should guard on that.
+ */
+export function computeTicket(
+  randomValue: Uint8Array | number[],
+  totalWeight: BN,
+): BN {
+  if (totalWeight.lten(0)) return new BN(0);
+  // Read the low 16 bytes (value[0..16]) as a little-endian u128.
+  const bytes = Buffer.from(Array.from(randomValue).slice(0, 16));
+  const value = new BN(bytes, "le");
+  return value.mod(totalWeight);
+}
+
+/**
  * Number of complete weeks a position has been held.
  * Floor division: weeksHeld(ts, ts + 7*86400 - 1) === 0
  *                 weeksHeld(ts, ts + 7*86400)     === 1

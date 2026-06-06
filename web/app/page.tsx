@@ -62,13 +62,20 @@ export default function Home() {
             becomes one winner&apos;s prize. No loss, all upside.
           </p>
 
-          <div className="mt-10">
+          <div className="mt-10 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
             <Link
               href="/app"
               className="inline-flex items-center gap-2 rounded-lg bg-primary px-8 py-4 font-semibold text-primary-foreground transition-colors hover:bg-accent-warm"
             >
               Try the demo
               <span aria-hidden="true">→</span>
+            </Link>
+            <Link
+              href="/verify"
+              className="inline-flex items-center gap-2 rounded-lg border border-border bg-card/60 px-8 py-4 font-semibold text-foreground backdrop-blur transition-colors hover:border-primary"
+            >
+              Verify draws
+              <span aria-hidden="true">↗</span>
             </Link>
           </div>
         </div>

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { BN } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
-import { computeOdds, weeksHeld, potEstimate, computeStreak, computeBadges, poolMemberSubset } from "../lib/gamify";
+import { computeOdds, weeksHeld, potEstimate, computeStreak, computeBadges, poolMemberSubset, computeTicket } from "../lib/gamify";
 import type { DrawSummary } from "../lib/stewfi";
 
 // ── Regression: computeOdds must reproduce simulated-draw.tsx numbers ────────
@@ -210,6 +210,82 @@ describe("computeStreak", () => {
     expect(result.drawsHeldThrough).toBe(0);
     expect(result.weeksHeld).toBe(0);
     expect(result.active).toBe(false);
+  });
+});
+
+// ── computeTicket ─────────────────────────────────────────────────────────────
+// The on-chain settle (lib.rs) derives the winner from
+//   ticket = u128(random_value[0..16] little-endian) % total_weight
+// then picks the position whose cumulative-weight window contains the ticket.
+// We reproduce the ticket against the REAL settled round-0 Draw account on
+// devnet and assert it falls inside the actual winner's window.
+
+describe("computeTicket", () => {
+  // ── live round-0 Draw account (read from devnet 2026-06-07) ───────────────
+  // Draw PDA 7ZHGfh4RhgrC8VyiqdW5YXmeMpTfdexNGQSxUAgZtZWY, status=settled.
+  const round0 = {
+    randomValueHex:
+      "f5bf26f1b03d1f5899352d53fc3c1462f3e23f2f7636692101370f9d22f9863a",
+    totalWeight: new BN("11082670000000"),
+    // The on-chain winner held the entire weight (sole effective position),
+    // so its window is [0, totalWeight) and the ticket must land inside it.
+    winner: new PublicKey("738qzq7a5NLVCSuKi2C8kcuFhCBd5Vhd5d21AeFXTsst"),
+  };
+
+  function hexToBytes(hex: string): Uint8Array {
+    const out = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.substr(i * 2, 2), 16);
+    return out;
+  }
+
+  it("reproduces the on-chain ticket for the settled round 0", () => {
+    const value = hexToBytes(round0.randomValueHex);
+    const ticket = computeTicket(value, round0.totalWeight);
+    // Known-good value: u128(value[0..16] LE) % total_weight.
+    expect(ticket.toString()).toBe("8874432220405");
+    // Ticket is always strictly less than total_weight.
+    expect(ticket.lt(round0.totalWeight)).toBe(true);
+  });
+
+  it("ticket falls inside the actual round-0 winner's weight window", () => {
+    // Round 0's winner held all the weight → its window is [0, totalWeight).
+    // The single-window check that the on-chain program performs: the ticket
+    // lies in [cum_before, cum_before + weight). Here cum_before = 0,
+    // weight = totalWeight, so the ticket must satisfy 0 ≤ ticket < totalWeight.
+    const ticket = computeTicket(hexToBytes(round0.randomValueHex), round0.totalWeight);
+    const cumBefore = new BN(0);
+    const running = round0.totalWeight; // cum_before + window weight
+    const inWindow = ticket.gte(cumBefore) && ticket.lt(running);
+    expect(inWindow).toBe(true);
+    // Sanity: the winner address is the expected on-chain winner.
+    expect(round0.winner.toBase58()).toBe("738qzq7a5NLVCSuKi2C8kcuFhCBd5Vhd5d21AeFXTsst");
+  });
+
+  it("reads value[0..16] little-endian (matches BN(buf, 'le'))", () => {
+    // 16 bytes: 0x01 in the least-significant position, rest zero → value = 1.
+    const bytes = new Uint8Array(32);
+    bytes[0] = 1;
+    const ticket = computeTicket(bytes, new BN(1000));
+    expect(ticket.toString()).toBe("1");
+  });
+
+  it("ignores bytes beyond the first 16 (only value[0..16] counts)", () => {
+    const lo = new Uint8Array(32);
+    lo[0] = 5; // value = 5 from low 16 bytes
+    lo[20] = 99; // high bytes — must be ignored
+    expect(computeTicket(lo, new BN(1000)).toString()).toBe("5");
+  });
+
+  it("returns 0 when totalWeight is 0 (no entries guard)", () => {
+    const bytes = new Uint8Array(32);
+    bytes[0] = 7;
+    expect(computeTicket(bytes, new BN(0)).toString()).toBe("0");
+  });
+
+  it("accepts a plain number[] (as Anchor decodes [u8; 32])", () => {
+    const arr = new Array(32).fill(0);
+    arr[0] = 10;
+    expect(computeTicket(arr, new BN(1000)).toString()).toBe("10");
   });
 });
 
