@@ -23,7 +23,8 @@ StewFi is a **no-loss prize savings** dApp on Solana. You deposit USDC; your pri
 - **Milestones:** M1 init, M2 deposit/withdraw, M3 Kamino yield (mainnet-only), M4 VRF draw + audit fixes (M-01/M-02/L-01/L-02 closed), M5 Growing Pot. `overflow-checks=true`. Admin `set_next_draw_ts` + accepts the devnet Switchboard PID (added for the live devnet draw).
 
 ## 5. Frontend
-- **Pages:** `/` pitch (mirrors the landing hero), `/app` the product (connected funnel), `/dashboard` funnel analytics. API: `/api/faucet` (mints test-USDC), `/api/track` (funnel events → Supabase or local JSONL), `/api/leaderboard` (referral counts).
+- **Pages:** `/` pitch (landing hero + last-winner spotlight), `/app` the product (connected funnel), `/dashboard` funnel analytics, **`/verify`** (provably-fair: VRF value → ticket derivation → winner per round, explorer links), **`/stats`** (TVL + Growing Pot + members tiles + inline-SVG prize-history chart). API: `/api/faucet`, `/api/track`, `/api/leaderboard`, **`/api/activity`** (recent events).
+- **Deposit UX:** wallet test-USDC balance + "Max" button; pot-ticker animates a count-up on value change. Draw card escalates to a "draw day" hype/countdown state when the draw is ≤6h out.
 - **`/app` layout (responsive blend):** Pot hero → 2-col core (Your position + Deposit/Withdraw | This-week draw) on desktop, single column on phone → tabbed Leaderboard / Badges / History.
 - **Components** (`web/components/`): pot-ticker, this-week (consolidated draw+odds+sim-preview), position-card, deposit-card, withdraw-card, claim-card, share-card (win + pre-deposit X intents), draw-reveal (cauldron animation), leaderboard, badges, draw-history, secondary-tabs (Leaderboard/Badges/History/Activity), devnet-banner, connect-button, **toast** (in-house toasts + explorer links), **skeletons**, **empty-state** (+ retry), **theme-toggle**/**theme-provider** (light/dark), **activity-feed** + **your-activity**. Extra API: `/api/activity` (recent events). `gamify.ts` gained `poolMemberSubset`.
 - **Lib** (`web/lib/`): `stewfi.ts` (program client: readPool/readPosition/readDraw/readCurrentDraw/listDraws/readAllPositions/deposit/withdraw/claimDraw — all `.accountsPartial`), `gamify.ts` (computeOdds/weeksHeld/potEstimate/computeStreak/computeBadges, unit-tested), `pdas.ts`, `format.ts`, `draw-utils.ts`, `track.ts`, `supabase.ts`, `constants.ts`, `idl.ts`.
@@ -66,11 +67,10 @@ cd /Users/ongeeshen/Project/stewfinance/web && npx vitest run   # 37 tests
 Run a live draw: re-arm `scripts/devnet-draw-setup.ts` then `scripts/devnet-draw.ts` (see those files' headers).
 
 ## 11. Candidate features to consider (menu — pick what to build)
-_(✅ already shipped 2026-06-07: toasts+skeletons, light/dark toggle, recent-activity + your-activity, leaderboard filter, faucet hardening.)_
-**UX / polish:** wallet balance + "max" on deposit; animated count-up on the pot; FAQ section (from landing); PWA/installable; richer themed connect modal.
-**Engagement / retention:** streak reminders/notifications; milestone badges with progress bars; a "draw day" hype/countdown state; deeper personal stats (odds-over-time chart).
-**Social / viral:** rendered share-card IMAGE (currently text intent); winner spotlight on the pitch page; referral dashboard polish.
-**Transparency / trust:** verifiable-draw page (show the VRF value + on-chain winner derivation); pool-stats page (TVL + prize-history chart); live "how the winner is picked" explainer.
+_(✅ shipped 2026-06-07: toasts+skeletons; light/dark toggle; recent-activity + your-activity; leaderboard filter; faucet hardening; deposit balance+Max; pot count-up; **/verify provably-fair page**; **/stats page + prize chart**; draw-day hype state; pitch winner spotlight.)_
+**UX / polish:** FAQ section (from landing); PWA/installable; richer themed connect modal; "how the winner is picked" interactive explainer.
+**Engagement / retention:** streak reminders/notifications; milestone badges with progress bars; deeper personal stats (odds-over-time chart).
+**Social / viral:** rendered share-card IMAGE (currently text intent); referral dashboard polish; embeddable pot widget.
 **Infra / launch:** auto-scheduler (cron draws); Supabase wiring + Vercel deploy; fresh launch pool; _(contract)_ pool-scoped UserPosition; _(contract)_ real referral odds-boost.
 
 ## 12. Strategic context (the part features don't fix)
