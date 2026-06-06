@@ -114,7 +114,7 @@ export function WinnerCarousel({ className = "" }: { className?: string }) {
             <span aria-hidden="true">🏆</span> Recent winners
           </span>
           {count > 1 && (
-            <span className="font-mono text-[11px] tabular-nums text-muted-foreground/70">
+            <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
               {safeIndex + 1}/{count}
             </span>
           )}
@@ -131,7 +131,7 @@ export function WinnerCarousel({ className = "" }: { className?: string }) {
               type="button"
               onClick={() => go(-1)}
               aria-label="Previous winner"
-              className="shrink-0 rounded-full border border-border bg-secondary px-2.5 py-1.5 text-sm text-foreground transition-colors hover:border-primary"
+              className="shrink-0 rounded-full border border-border bg-secondary px-2.5 py-1.5 text-sm text-foreground transition-colors hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             >
               <span aria-hidden="true">←</span>
             </button>
@@ -160,7 +160,7 @@ export function WinnerCarousel({ className = "" }: { className?: string }) {
               type="button"
               onClick={() => go(1)}
               aria-label="Next winner"
-              className="shrink-0 rounded-full border border-border bg-secondary px-2.5 py-1.5 text-sm text-foreground transition-colors hover:border-primary"
+              className="shrink-0 rounded-full border border-border bg-secondary px-2.5 py-1.5 text-sm text-foreground transition-colors hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             >
               <span aria-hidden="true">→</span>
             </button>
@@ -177,7 +177,7 @@ export function WinnerCarousel({ className = "" }: { className?: string }) {
                 onClick={() => setIndex(i)}
                 aria-label={`Show winner ${i + 1} of ${count}`}
                 aria-current={i === safeIndex ? "true" : undefined}
-                className={`h-1.5 rounded-full transition-all ${
+                className={`h-1.5 rounded-full transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${
                   i === safeIndex
                     ? "w-5 bg-accent-warm"
                     : "w-1.5 bg-border hover:bg-muted-foreground"

@@ -10,7 +10,7 @@ function VerifyLink() {
   return (
     <Link
       href="/verify"
-      className="text-xs font-medium text-primary underline decoration-border underline-offset-2 hover:text-accent-warm"
+      className="rounded text-xs font-medium text-primary underline decoration-border underline-offset-2 hover:text-accent-warm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card"
     >
       Provably fair ↗
     </Link>

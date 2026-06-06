@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { BN } from "@coral-xyz/anchor";
 import { fmtUsdc, tween } from "@/lib/format";
 import { potEstimate } from "@/lib/gamify";
+import { InfoTooltip } from "@/components/tooltip";
 
 /** Shape we need from the readPool result. */
 export type PotTickerPool = {
@@ -99,8 +100,12 @@ export function PotTicker({ pool }: { pool: PotTickerPool }) {
 
   return (
     <div className="rounded-xl border border-border bg-card p-6 cauldron-glow">
-      <div className="text-[11px] font-medium uppercase tracking-widest text-muted-foreground mb-2">
-        The pot grows forever
+      <div className="mb-2 flex items-center gap-1 text-[11px] font-medium uppercase tracking-widest text-muted-foreground">
+        Growing Pot
+        <InfoTooltip label="Growing Pot">
+          20% of every prize compounds here; its yield feeds future prizes — so
+          the prize grows over time.
+        </InfoTooltip>
       </div>
 
       <div
@@ -125,9 +130,15 @@ export function PotTicker({ pool }: { pool: PotTickerPool }) {
       </div>
 
       {estimatedPrize > 0 && (
-        <div className="mt-4 border-t border-border pt-3 text-xs text-muted-foreground">
-          ~<span className="font-mono tabular-nums">{prizeFmt}</span> USDC estimated draw prize this week
-          <span className="ml-1 text-muted-foreground/60">(illustration only)</span>
+        <div className="mt-4 flex flex-wrap items-center gap-x-1 border-t border-border pt-3 text-xs text-muted-foreground">
+          <span>
+            ~<span className="font-mono tabular-nums">{prizeFmt}</span> USDC estimated draw prize this week
+          </span>
+          <InfoTooltip label="Prize estimate">
+            Devnet: prize is test yield injected into the pool, not real Kamino
+            yield.
+          </InfoTooltip>
+          <span className="text-muted-foreground">(illustration only)</span>
         </div>
       )}
     </div>

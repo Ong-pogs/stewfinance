@@ -69,7 +69,7 @@ export function ShareCard(props: ShareCardProps) {
       </p>
       <button
         onClick={handleShare}
-        className="mt-3 w-full rounded-lg border border-border bg-transparent py-2 text-sm text-foreground"
+        className="mt-3 w-full rounded-lg border border-border bg-transparent py-2 text-sm text-foreground transition-colors hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
       >
         Share on X
       </button>

@@ -135,7 +135,7 @@ export function HowItWorksInteractive() {
               value={deposit}
               onChange={(e) => setDeposit(Number(e.target.value))}
               aria-valuetext={`${fmtInt(deposit)} USDC`}
-              className="mt-2 w-full accent-primary"
+              className="mt-2 w-full accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card"
             />
             <div className="mt-1 flex justify-between font-mono text-[11px] tabular-nums text-muted-foreground">
               <span>{DEPOSIT_MIN}</span>
@@ -168,7 +168,7 @@ export function HowItWorksInteractive() {
               value={days}
               onChange={(e) => setDays(Number(e.target.value))}
               aria-valuetext={`${days} ${days === 1 ? "day" : "days"}`}
-              className="mt-2 w-full accent-primary"
+              className="mt-2 w-full accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card"
             />
             <div className="mt-1 flex justify-between font-mono text-[11px] tabular-nums text-muted-foreground">
               <span>{DAYS_MIN}d</span>
@@ -184,7 +184,7 @@ export function HowItWorksInteractive() {
               key={c.label}
               type="button"
               onClick={c.apply}
-              className="rounded-full border border-border bg-secondary/40 px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-primary hover:text-foreground"
+              className="rounded-full border border-border bg-secondary/40 px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-primary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card"
             >
               {c.label}
             </button>
@@ -260,7 +260,7 @@ export function HowItWorksInteractive() {
           depend on the live pool of depositors. See the real draw math on the{" "}
           <Link
             href="/verify"
-            className="font-medium text-foreground underline decoration-border underline-offset-4 transition-colors hover:decoration-primary"
+            className="rounded font-medium text-foreground underline decoration-border underline-offset-4 transition-colors hover:decoration-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card"
           >
             verify page
           </Link>

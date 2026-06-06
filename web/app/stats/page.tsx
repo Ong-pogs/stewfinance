@@ -111,7 +111,7 @@ export default function StatsPage() {
           <ThemeToggle />
           <Link
             href="/app"
-            className="rounded-lg border border-border bg-secondary px-3 py-2 text-sm font-medium text-foreground transition-colors hover:border-primary"
+            className="rounded-lg border border-border bg-secondary px-3 py-2 text-sm font-medium text-foreground transition-colors hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           >
             Open app
           </Link>
@@ -418,7 +418,8 @@ function EmbedThis() {
         <button
           type="button"
           onClick={copy}
-          className="rounded-lg border border-border bg-secondary px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-primary"
+          aria-label="Copy embed code"
+          className="rounded-lg border border-border bg-secondary px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card"
         >
           {copied ? "Copied ✓" : "Copy"}
         </button>

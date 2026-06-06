@@ -134,7 +134,7 @@ export default function VerifyPage() {
           <ThemeToggle />
           <Link
             href="/app"
-            className="rounded-lg border border-border bg-secondary px-3 py-2 text-sm font-medium text-foreground transition-colors hover:border-primary"
+            className="rounded-lg border border-border bg-secondary px-3 py-2 text-sm font-medium text-foreground transition-colors hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           >
             Open app
           </Link>
@@ -186,7 +186,7 @@ export default function VerifyPage() {
             href="https://docs.switchboard.xyz/product-documentation/randomness"
             target="_blank"
             rel="noreferrer"
-            className="underline decoration-border underline-offset-2 hover:text-foreground"
+            className="rounded underline decoration-border underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           >
             Switchboard On-Demand VRF
           </a>
@@ -236,7 +236,7 @@ function DrawProof({ draw }: { draw: VerifiableDraw }) {
           href={explorerAddr(drawPda(draw.round).toBase58())}
           target="_blank"
           rel="noreferrer"
-          className="text-xs text-primary underline decoration-border underline-offset-2 hover:text-accent-warm"
+          className="rounded text-xs text-primary underline decoration-border underline-offset-2 hover:text-accent-warm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card"
         >
           Draw account ↗
         </a>
@@ -262,7 +262,7 @@ function DrawProof({ draw }: { draw: VerifiableDraw }) {
               href={explorerAddr(winnerStr)}
               target="_blank"
               rel="noreferrer"
-              className="font-mono text-foreground underline decoration-border underline-offset-2 hover:text-accent-warm"
+              className="rounded font-mono text-foreground underline decoration-border underline-offset-2 hover:text-accent-warm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card"
             >
               {abbrev(winnerStr)} ↗
             </a>
@@ -295,7 +295,7 @@ function DrawProof({ draw }: { draw: VerifiableDraw }) {
           href={explorerAddr(draw.randomnessAccount.toBase58())}
           target="_blank"
           rel="noreferrer"
-          className="mt-1.5 inline-block text-xs text-primary underline decoration-border underline-offset-2 hover:text-accent-warm"
+          className="mt-1.5 inline-block rounded text-xs text-primary underline decoration-border underline-offset-2 hover:text-accent-warm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card"
         >
           Randomness account ↗
         </a>

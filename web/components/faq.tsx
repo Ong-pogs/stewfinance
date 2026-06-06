@@ -33,7 +33,7 @@ const FAQS: { q: string; a: ReactNode }[] = [
         verifiable. See it for yourself on the{" "}
         <Link
           href="/verify"
-          className="font-medium text-foreground underline decoration-border underline-offset-4 transition-colors hover:decoration-primary"
+          className="rounded font-medium text-foreground underline decoration-border underline-offset-4 transition-colors hover:decoration-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card"
         >
           verify page
         </Link>

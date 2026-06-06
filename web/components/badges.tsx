@@ -74,11 +74,11 @@ function BadgePill({ badge }: { badge: Badge }) {
     >
       <div className="flex items-baseline justify-between gap-2">
         <div className="text-xs font-semibold text-muted-foreground">{badge.label}</div>
-        <div className="text-[10px] font-medium tabular-nums text-muted-foreground/80">
+        <div className="text-[10px] font-medium tabular-nums text-muted-foreground">
           {badge.current} / {badge.target}
         </div>
       </div>
-      <div className="mt-0.5 text-[10px] text-muted-foreground/70 leading-snug">{badge.hint}</div>
+      <div className="mt-0.5 text-[10px] text-muted-foreground leading-snug">{badge.hint}</div>
       <div
         className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-secondary"
         role="progressbar"

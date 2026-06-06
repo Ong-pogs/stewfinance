@@ -91,7 +91,7 @@ export default function EmbedPotPage() {
           href={appHref}
           target="_blank"
           rel="noreferrer"
-          className="mt-0.5 inline-flex items-center gap-1 text-[11px] font-medium text-primary underline decoration-border underline-offset-2 transition-colors hover:text-accent-warm"
+          className="mt-0.5 inline-flex items-center gap-1 rounded text-[11px] font-medium text-primary underline decoration-border underline-offset-2 transition-colors hover:text-accent-warm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         >
           Open <span aria-hidden="true">↗</span>
         </a>

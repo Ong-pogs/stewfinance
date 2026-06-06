@@ -7,6 +7,7 @@ import { abbrev, fmtUsdc } from "@/lib/format";
 import { computeOdds, weeksHeld } from "@/lib/gamify";
 import { EmptyState } from "@/components/empty-state";
 import { OddsProjection } from "@/components/odds-projection";
+import { InfoTooltip } from "@/components/tooltip";
 import type { ActivityEvent } from "@/app/api/activity/route";
 
 /**
@@ -136,8 +137,12 @@ export function YourActivity({
           {/* ── Your current entry ── */}
           {hasPosition && (
             <div>
-              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <div className="flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 Your entry
+                <InfoTooltip label="Your weight">
+                  Your chance = your weight ÷ everyone&apos;s weight. Weight =
+                  deposit size × time held. Nothing else changes it.
+                </InfoTooltip>
               </div>
               <div className="mt-1 font-mono text-2xl font-bold tabular-nums text-foreground">
                 {fmtUsdc(amount!)}{" "}

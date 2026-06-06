@@ -186,7 +186,7 @@ function ToastRow({
               href={explorerTxUrl(toast.txSig)}
               target="_blank"
               rel="noopener noreferrer"
-              className="mt-1.5 inline-block text-xs font-medium text-primary underline underline-offset-2 hover:text-accent-warm"
+              className="mt-1.5 inline-block rounded text-xs font-medium text-primary underline underline-offset-2 hover:text-accent-warm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
             >
               View on explorer ↗
             </a>
@@ -196,7 +196,7 @@ function ToastRow({
           type="button"
           onClick={() => onDismiss(toast.id)}
           aria-label="Dismiss notification"
-          className="-mr-1 -mt-1 shrink-0 rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+          className="-mr-1 -mt-1 shrink-0 rounded p-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
         >
           <span aria-hidden="true" className="text-sm leading-none">×</span>
         </button>

@@ -146,6 +146,13 @@ body {
   background: var(--card) !important;
   border-color: var(--primary) !important;
 }
+/* Visible keyboard focus ring on the connect button (uses the --ring token). */
+.wallet-adapter-button:focus-visible {
+  outline: none !important;
+  box-shadow:
+    0 0 0 2px var(--background),
+    0 0 0 4px var(--ring) !important;
+}
 .wallet-adapter-button-trigger {
   background: var(--secondary) !important;
 }
@@ -217,6 +224,13 @@ body {
 
 .toast-enter {
   animation: toast-enter 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ── Info tooltip enter (warm, subtle fade + slight rise) ──────────── */
+
+@keyframes tooltip-in {
+  0%   { transform: translate(-50%, 4px); opacity: 0; }
+  100% { transform: translate(-50%, 0);   opacity: 1; }
 }
 
 /* ── Skeleton shimmer (warm, token-driven) ─────────────────────────── */

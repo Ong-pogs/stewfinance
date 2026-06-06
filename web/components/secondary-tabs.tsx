@@ -47,7 +47,7 @@ export function SecondaryTabs({
               role="tab"
               aria-selected={isActive}
               onClick={() => setActive(tab.key)}
-              className={`rounded-[--radius] px-3 py-1.5 text-sm font-medium transition-colors ${
+              className={`rounded-[--radius] px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${
                 isActive
                   ? "bg-primary text-primary-foreground"
                   : "border border-border text-muted-foreground"

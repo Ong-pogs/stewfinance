@@ -67,7 +67,7 @@ export function ClaimCard({
       <button
         onClick={handleClaim}
         disabled={claiming}
-        className="mt-4 w-full rounded-lg bg-primary py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"
+        className="mt-4 w-full rounded-lg bg-primary py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card"
       >
         {claiming ? "Claiming…" : `Claim ${fmtUsdc(claimable.winnerAmount)} USDC`}
       </button>

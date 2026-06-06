@@ -114,7 +114,7 @@ export function DepositCard({ onDone }: { onDone: () => void }) {
   return (
     <div className="rounded-xl border border-border bg-card p-5">
       <button onClick={doFaucet} disabled={busy !== "idle"}
-        className="mb-4 w-full rounded-lg border border-border bg-transparent py-2 text-sm text-foreground disabled:opacity-50">
+        className="mb-4 w-full rounded-lg border border-border bg-transparent py-2 text-sm text-foreground transition-colors hover:border-primary disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background">
         {busy === "faucet" ? "Minting…" : "1. Get 100 test USDC"}
       </button>
       <div className="flex items-baseline justify-between">
@@ -129,13 +129,15 @@ export function DepositCard({ onDone }: { onDone: () => void }) {
       </div>
       <div className="relative mt-1">
         <input value={amount} onChange={(e) => setAmount(e.target.value)} type="number"
-          className="w-full rounded-lg bg-input border border-border px-3 py-2 pr-16 font-mono tabular-nums text-foreground" />
+          aria-label="Deposit amount in USDC"
+          className="w-full rounded-lg bg-input border border-border px-3 py-2 pr-16 font-mono tabular-nums text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background" />
         <button
           type="button"
           onClick={setMax}
           disabled={!canMax || busy !== "idle"}
           title={canMax ? undefined : "get test USDC first"}
-          className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md border border-border bg-transparent px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40">
+          aria-label="Set deposit to maximum balance"
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md border border-border bg-transparent px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background">
           Max
         </button>
       </div>
@@ -143,7 +145,7 @@ export function DepositCard({ onDone }: { onDone: () => void }) {
         <p className="mt-1 text-xs text-muted-foreground">get test USDC first</p>
       )}
       <button onClick={doDeposit} disabled={busy !== "idle"}
-        className="mt-3 w-full rounded-lg bg-primary py-3 font-semibold text-primary-foreground disabled:opacity-50">
+        className="mt-3 w-full rounded-lg bg-primary py-3 font-semibold text-primary-foreground disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background">
         {busy === "deposit" ? "Confirming…" : "Deposit"}
       </button>
       {err && <p className="mt-3 text-sm text-destructive">{err}</p>}

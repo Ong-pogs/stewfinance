@@ -101,12 +101,14 @@ export function Leaderboard({
       <div className="text-sm font-semibold text-foreground mb-3">Leaderboard</div>
 
       {/* Tab bar */}
-      <div className="flex gap-1 mb-4">
+      <div role="tablist" aria-label="Leaderboard ranking" className="flex gap-1 mb-4">
         {(Object.keys(TAB_LABELS) as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
-            className={`flex-1 rounded-md py-1 text-xs font-medium transition-colors ${
+            role="tab"
+            aria-selected={tab === t}
+            className={`flex-1 rounded-md py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card ${
               tab === t
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:text-foreground"

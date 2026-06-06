@@ -4,6 +4,7 @@ import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { getProgram, requestWithdraw, withdraw, readPosition } from "@/lib/stewfi";
 import { track } from "@/lib/track";
 import { useToast } from "@/components/toast";
+import { InfoTooltip } from "@/components/tooltip";
 
 export function WithdrawCard({ onDone }: { onDone: () => void }) {
   const { connection } = useConnection();
@@ -49,8 +50,15 @@ export function WithdrawCard({ onDone }: { onDone: () => void }) {
 
   return (
     <div className="rounded-xl border border-border bg-card p-5">
+      <div className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-foreground">
+        Withdraw
+        <InfoTooltip label="Cooldown">
+          After you request a withdrawal there&apos;s a 24h wait, then your full
+          principal is withdrawable.
+        </InfoTooltip>
+      </div>
       <button onClick={act} disabled={busy}
-        className="w-full rounded-lg border border-border bg-transparent py-2 text-sm text-foreground disabled:opacity-50">
+        className="w-full rounded-lg border border-border bg-transparent py-2 text-sm text-foreground transition-colors hover:border-primary disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background">
         {busy ? "Working…" : "Request / complete withdrawal"}
       </button>
       <p className="mt-2 text-xs text-muted-foreground">No-loss: your full principal is always withdrawable (24h cooldown).</p>

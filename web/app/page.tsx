@@ -70,21 +70,21 @@ export default function Home() {
           <div className="mt-10 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
             <Link
               href="/app"
-              className="inline-flex items-center gap-2 rounded-lg bg-primary px-8 py-4 font-semibold text-primary-foreground transition-colors hover:bg-accent-warm"
+              className="inline-flex items-center gap-2 rounded-lg bg-primary px-8 py-4 font-semibold text-primary-foreground transition-colors hover:bg-accent-warm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             >
               Try the demo
               <span aria-hidden="true">→</span>
             </Link>
             <Link
               href="/verify"
-              className="inline-flex items-center gap-2 rounded-lg border border-border bg-card/60 px-8 py-4 font-semibold text-foreground backdrop-blur transition-colors hover:border-primary"
+              className="inline-flex items-center gap-2 rounded-lg border border-border bg-card/60 px-8 py-4 font-semibold text-foreground backdrop-blur transition-colors hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             >
               Verify draws
               <span aria-hidden="true">↗</span>
             </Link>
             <Link
               href="/stats"
-              className="inline-flex items-center gap-2 rounded-lg border border-border bg-card/60 px-8 py-4 font-semibold text-foreground backdrop-blur transition-colors hover:border-primary"
+              className="inline-flex items-center gap-2 rounded-lg border border-border bg-card/60 px-8 py-4 font-semibold text-foreground backdrop-blur transition-colors hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             >
               Pool stats
               <span aria-hidden="true">↗</span>

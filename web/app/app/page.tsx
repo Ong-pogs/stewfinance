@@ -166,7 +166,7 @@ export default function AppPage() {
         <div className="flex items-center gap-2">
           <Link
             href="/stats"
-            className="hidden rounded-lg border border-border bg-secondary px-3 py-2 text-sm font-medium text-foreground transition-colors hover:border-primary sm:inline-block"
+            className="hidden rounded-lg border border-border bg-secondary px-3 py-2 text-sm font-medium text-foreground transition-colors hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:inline-block"
           >
             Pool stats
           </Link>

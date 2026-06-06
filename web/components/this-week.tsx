@@ -4,6 +4,7 @@ import { BN } from "@coral-xyz/anchor";
 import { fmtUsdc } from "@/lib/format";
 import { formatCountdown, statusLabel, isDrawSoon } from "@/lib/draw-utils";
 import { computeOdds } from "@/lib/gamify";
+import { InfoTooltip } from "@/components/tooltip";
 
 /**
  * "Draw day" escalation threshold. When the draw is `pending` AND its
@@ -168,7 +169,13 @@ export function ThisWeek({
           <div className="mt-1 text-xs text-muted-foreground">Round {draw.round}</div>
           {prizeSnapped ? (
             <div className="mt-2">
-              <div className="text-xs text-muted-foreground">Prize pool</div>
+              <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                Prize pool
+                <InfoTooltip label="Prize estimate">
+                  Devnet: prize is test yield injected into the pool, not real
+                  Kamino yield.
+                </InfoTooltip>
+              </div>
               <div className="text-3xl font-bold text-accent-warm font-mono tabular-nums">
                 {fmtUsdc(prizeSnapped)} USDC
                 {(draw.status === "settled" || draw.status === "claimed") && (
@@ -222,7 +229,13 @@ export function ThisWeek({
       {/* Your odds + weight bar (was TicketsViz — same computeOdds output) */}
       {hasDeposit && (
         <div className="mt-5 border-t border-border pt-4">
-          <div className="text-sm font-semibold text-foreground mb-3">Your odds</div>
+          <div className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-foreground">
+            Your odds
+            <InfoTooltip label="Your odds">
+              Your chance = your weight ÷ everyone&apos;s weight. Weight =
+              deposit size × time held. Nothing else changes it.
+            </InfoTooltip>
+          </div>
 
           {/* Weight bar */}
           <div className="mb-3">
@@ -266,7 +279,7 @@ export function ThisWeek({
             type="button"
             onClick={() => setShowPreview((v) => !v)}
             aria-expanded={showPreview}
-            className="mt-3 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
+            className="mt-3 rounded text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card"
           >
             {showPreview ? "Hide preview" : "Preview a draw (simulated)"}
           </button>
@@ -277,7 +290,7 @@ export function ThisWeek({
                 type="button"
                 onClick={preview}
                 disabled={rolling}
-                className="w-full rounded-[--radius] border border-border py-2 text-sm text-foreground disabled:opacity-50"
+                className="w-full rounded-[--radius] border border-border py-2 text-sm text-foreground transition-colors hover:border-primary disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card"
               >
                 {rolling ? "Drawing…" : "Roll a simulated draw"}
               </button>

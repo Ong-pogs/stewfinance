@@ -120,7 +120,7 @@ export default function SharePage({ searchParams }: { searchParams: SP }) {
       <p className="mt-3 max-w-md text-base text-muted-foreground">{sub}</p>
       <Link
         href={appHref}
-        className="mt-8 rounded-lg bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground"
+        className="mt-8 rounded-lg bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
       >
         Open the app
       </Link>
