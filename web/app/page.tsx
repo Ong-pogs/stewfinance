@@ -5,6 +5,7 @@ import { AnchorProvider, BN, Program } from "@coral-xyz/anchor";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { track } from "@/lib/track";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { Faq } from "@/components/faq";
 import { STEWFI_IDL, Stewfi } from "@/lib/idl";
 import { listDraws } from "@/lib/stewfi";
 import { fmtUsdc, abbrev } from "@/lib/format";
@@ -130,6 +131,9 @@ export default function Home() {
           ))}
         </ol>
       </section>
+
+      {/* FAQ — honest Q&A, native details/summary, on-theme. */}
+      <Faq />
     </main>
   );
 }
