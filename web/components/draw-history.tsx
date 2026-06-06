@@ -2,13 +2,19 @@
 import { DrawSummary } from "@/lib/stewfi";
 import { fmtUsdc, abbrev } from "@/lib/format";
 import { statusLabel } from "@/lib/draw-utils";
+import { EmptyState } from "@/components/empty-state";
 
 export function DrawHistory({ draws }: { draws: DrawSummary[] }) {
   if (draws.length === 0) {
     return (
       <div className="rounded-xl border border-border bg-card p-5">
         <div className="text-sm font-semibold text-foreground mb-2">Draw history</div>
-        <p className="text-sm text-muted-foreground">No draws recorded yet.</p>
+        <EmptyState
+          icon="🎲"
+          title="No draws yet"
+          hint="The first weekly draw appears here once the pool runs one."
+          className="py-6"
+        />
       </div>
     );
   }

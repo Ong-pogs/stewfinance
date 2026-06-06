@@ -3,10 +3,12 @@ import { useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { getProgram, requestWithdraw, withdraw, readPosition } from "@/lib/stewfi";
 import { track } from "@/lib/track";
+import { useToast } from "@/components/toast";
 
 export function WithdrawCard({ onDone }: { onDone: () => void }) {
   const { connection } = useConnection();
   const wallet = useWallet();
+  const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -20,16 +22,28 @@ export function WithdrawCard({ onDone }: { onDone: () => void }) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const requestedAt = pos ? Number((pos.withdrawRequestedAt as any).toString()) : 0;
       if (!requestedAt) {
-        await requestWithdraw(program, wallet.publicKey);
+        const sig = await requestWithdraw(program, wallet.publicKey);
         track("withdraw_requested", { wallet: wallet.publicKey.toBase58() });
         setMsg("Withdrawal requested. 24h cooldown, then withdraw. (Demo: cooldown is real on-chain.)");
+        toast.success("Withdrawal requested", {
+          description: "24h cooldown, then complete the withdrawal. Principal is safe throughout.",
+          txSig: sig,
+        });
       } else {
-        await withdraw(program, wallet.publicKey);
+        const sig = await withdraw(program, wallet.publicKey);
         track("withdraw_completed", { wallet: wallet.publicKey.toBase58() });
         setMsg("Withdrawn. Principal returned in full.");
+        toast.success("Withdrawn", {
+          description: "Your principal was returned in full.",
+          txSig: sig,
+        });
         onDone();
       }
-    } catch (e) { setMsg((e as Error).message); }
+    } catch (e) {
+      const m = (e as Error).message;
+      setMsg(m);
+      toast.error("Withdrawal failed", { description: m });
+    }
     finally { setBusy(false); }
   }
 

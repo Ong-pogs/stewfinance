@@ -5,10 +5,12 @@ import { getProgram, deposit } from "@/lib/stewfi";
 import { toBaseUnits } from "@/lib/format";
 import { MIN_DEPOSIT_UI, MAX_DEPOSIT_UI } from "@/lib/constants";
 import { track } from "@/lib/track";
+import { useToast } from "@/components/toast";
 
 export function DepositCard({ onDone }: { onDone: () => void }) {
   const { connection } = useConnection();
   const wallet = useWallet();
+  const toast = useToast();
   const [amount, setAmount] = useState("50");
   const [busy, setBusy] = useState<"idle" | "faucet" | "deposit">("idle");
   const [err, setErr] = useState<string | null>(null);
@@ -21,9 +23,26 @@ export function DepositCard({ onDone }: { onDone: () => void }) {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ wallet: wallet.publicKey.toBase58() }),
       }).then((x) => x.json());
-      if (!r.ok) throw new Error(r.error ?? "faucet failed");
+      if (!r.ok) {
+        if (r.error === "rate_limited") {
+          toast.info("Faucet on cooldown", {
+            description: "You can request test USDC again in about a minute.",
+          });
+        }
+        throw new Error(r.error === "rate_limited" ? "Faucet rate-limited — try again in a minute." : (r.error ?? "faucet failed"));
+      }
       track("faucet", { wallet: wallet.publicKey.toBase58() });
-    } catch (e) { setErr((e as Error).message); }
+      toast.success("Got 100 test USDC", {
+        description: "Test-only tokens, minted to your wallet on devnet.",
+        txSig: typeof r.sig === "string" ? r.sig : undefined,
+      });
+    } catch (e) {
+      const msg = (e as Error).message;
+      setErr(msg);
+      if (msg !== "Faucet rate-limited — try again in a minute.") {
+        toast.error("Faucet failed", { description: msg });
+      }
+    }
     finally { setBusy("idle"); }
   }
 
@@ -31,17 +50,29 @@ export function DepositCard({ onDone }: { onDone: () => void }) {
     if (!wallet.publicKey || !wallet.signTransaction) return;
     const n = Number(amount);
     if (n < MIN_DEPOSIT_UI || n > MAX_DEPOSIT_UI) {
-      setErr(`Amount must be ${MIN_DEPOSIT_UI}–${MAX_DEPOSIT_UI} USDC`); return;
+      const msg = `Amount must be ${MIN_DEPOSIT_UI}–${MAX_DEPOSIT_UI} USDC`;
+      setErr(msg);
+      toast.error("Check the amount", { description: msg });
+      return;
     }
     setBusy("deposit"); setErr(null);
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const program = getProgram(connection, wallet as any);
       track("deposit_submitted", { wallet: wallet.publicKey.toBase58(), props: { amount: n } });
-      await deposit(program, wallet.publicKey, toBaseUnits(n));
+      toast.info("Deposit submitted", { description: "Confirm in your wallet, then waiting for the network…" });
+      const sig = await deposit(program, wallet.publicKey, toBaseUnits(n));
       track("deposit_confirmed", { wallet: wallet.publicKey.toBase58(), props: { amount: n } });
+      toast.success(`Deposited ${n} USDC`, {
+        description: "Your principal stays yours and is always withdrawable.",
+        txSig: sig,
+      });
       onDone();
-    } catch (e) { setErr((e as Error).message); }
+    } catch (e) {
+      const msg = (e as Error).message;
+      setErr(msg);
+      toast.error("Deposit failed", { description: msg });
+    }
     finally { setBusy("idle"); }
   }
 

@@ -16,6 +16,8 @@ import { PotTicker } from "@/components/pot-ticker";
 import { Leaderboard } from "@/components/leaderboard";
 import { Badges } from "@/components/badges";
 import { SecondaryTabs } from "@/components/secondary-tabs";
+import { PotHeroSkeleton, PositionSkeleton, ThisWeekSkeleton } from "@/components/skeletons";
+import { LoadError } from "@/components/empty-state";
 import type { PositionRow } from "@/components/leaderboard";
 import { getProgram, readPosition, readPool, readCurrentDraw, listDraws, readAllPositions, DrawSummary } from "@/lib/stewfi";
 import { fmtUsdc } from "@/lib/format";
@@ -44,6 +46,10 @@ export default function AppPage() {
   const [heroSecsLeft, setHeroSecsLeft] = useState<number>(0);
   // Read-only pool snapshot for the disconnected hero teaser (no signer needed).
   const [teaserPot, setTeaserPot] = useState<BN | null>(null);
+  // First-load + read-failure UX state (purely presentational; no logic change).
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const hasLoadedRef = useRef(false);
   const prevDrawStatusRef = useRef<string | null>(null);
 
   // Track page visit and capture referral code on mount (first-touch only).
@@ -60,28 +66,39 @@ export default function AppPage() {
   }, []);
 
   const refresh = useCallback(async () => {
-    if (!wallet.publicKey) { setAmount(null); return; }
+    if (!wallet.publicKey) { setAmount(null); setIsLoading(false); return; }
+    // Show the skeleton only on the first load; later refreshes (post-action)
+    // update in place so the screen never blanks out.
+    if (!hasLoadedRef.current) setIsLoading(true);
+    setLoadError(false);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const prog = getProgram(connection, wallet as any);
     setProgram(prog);
-    const [pos, poolData, draw, allDraws, allPositions] = await Promise.all([
-      readPosition(prog, wallet.publicKey),
-      readPool(prog),
-      readCurrentDraw(prog),
-      listDraws(prog),
-      readAllPositions(prog),
-    ]);
-    setAmount(pos ? (pos.amount as BN) : null);
-    setFirstTs(pos ? (pos.firstDepositTs as BN) : null);
-    setWithdrawRequestedAt(pos ? (pos.withdrawRequestedAt as BN) : null);
-    setPoolTotal(poolData ? (poolData.totalPrincipal as BN) : null);
-    setSumAmount(poolData ? (poolData.sumAmount as BN) : null);
-    setSumAmtFirstTs(poolData ? (poolData.sumAmountFirstTs as BN) : null);
-    setNextDrawTs(poolData ? (poolData.nextDrawTs as BN) : null);
-    setCurrentDraw(draw);
-    setDraws(allDraws);
-    setPositions(allPositions as PositionRow[]);
-    setPool(poolData);
+    try {
+      const [pos, poolData, draw, allDraws, allPositions] = await Promise.all([
+        readPosition(prog, wallet.publicKey),
+        readPool(prog),
+        readCurrentDraw(prog),
+        listDraws(prog),
+        readAllPositions(prog),
+      ]);
+      setAmount(pos ? (pos.amount as BN) : null);
+      setFirstTs(pos ? (pos.firstDepositTs as BN) : null);
+      setWithdrawRequestedAt(pos ? (pos.withdrawRequestedAt as BN) : null);
+      setPoolTotal(poolData ? (poolData.totalPrincipal as BN) : null);
+      setSumAmount(poolData ? (poolData.sumAmount as BN) : null);
+      setSumAmtFirstTs(poolData ? (poolData.sumAmountFirstTs as BN) : null);
+      setNextDrawTs(poolData ? (poolData.nextDrawTs as BN) : null);
+      setCurrentDraw(draw);
+      setDraws(allDraws);
+      setPositions(allPositions as PositionRow[]);
+      setPool(poolData);
+      hasLoadedRef.current = true;
+    } catch {
+      setLoadError(true);
+    } finally {
+      setIsLoading(false);
+    }
   }, [connection, wallet]);
 
   useEffect(() => { refresh(); }, [refresh]);
@@ -198,6 +215,18 @@ export default function AppPage() {
             </p>
           </div>
         </section>
+      ) : loadError && !hasLoadedRef.current ? (
+        /* First-load read failure — gentle inline retry (no zeros shown). */
+        <LoadError onRetry={refresh} retrying={isLoading} />
+      ) : isLoading && !hasLoadedRef.current ? (
+        /* First on-chain reads in flight — skeletons, not empty/zero values. */
+        <div className="space-y-6">
+          <PotHeroSkeleton />
+          <div className="grid gap-4 md:grid-cols-2">
+            <PositionSkeleton />
+            <ThisWeekSkeleton />
+          </div>
+        </div>
       ) : (
         <div className="space-y-6">
           {/* (b) Pot hero — full width */}

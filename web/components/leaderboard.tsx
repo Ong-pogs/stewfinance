@@ -4,6 +4,7 @@ import { BN } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import { abbrev, fmtUsdc } from "@/lib/format";
 import { weeksHeld, poolMemberSubset } from "@/lib/gamify";
+import { EmptyState } from "@/components/empty-state";
 import type { LeaderboardEntry } from "@/app/api/leaderboard/route";
 
 export type PositionRow = {
@@ -91,8 +92,8 @@ export function Leaderboard({
     }`;
   }
 
-  function emptyState(msg: string) {
-    return <p className="py-4 text-center text-sm text-muted-foreground">{msg}</p>;
+  function emptyState(title: string, hint?: string) {
+    return <EmptyState icon="🫙" title={title} hint={hint} className="py-6" />;
   }
 
   return (
@@ -120,7 +121,7 @@ export function Leaderboard({
       {tab === "amount" && (
         <div>
           {byAmount.length === 0
-            ? emptyState("No deposits yet.")
+            ? emptyState("No deposits yet", "Be the first to fund the pool.")
             : byAmount.map((p, i) => (
                 <div key={p.user.toBase58()} className={rowClass(isMe(p.user))}>
                   <span className="flex items-center gap-2">
@@ -148,7 +149,7 @@ export function Leaderboard({
       {tab === "weeks" && (
         <div>
           {byWeeks.length === 0
-            ? emptyState("No deposits yet.")
+            ? emptyState("No deposits yet", "Time held builds once the first deposit lands.")
             : byWeeks.map((p, i) => {
                 const wks = weeksHeld(p.firstDepositTs, nowTs);
                 return (
@@ -180,9 +181,9 @@ export function Leaderboard({
       {tab === "referrals" && (
         <div>
           {refLoading ? (
-            <p className="py-4 text-center text-sm text-muted-foreground">Loading…</p>
+            <p className="py-6 text-center text-sm text-muted-foreground">Loading…</p>
           ) : refEntries.length === 0 ? (
-            emptyState("No referrals recorded yet.")
+            emptyState("No referrals yet", "Share your link — invites show up here.")
           ) : (
             refEntries.slice(0, TOP_N).map((e, i) => (
               <div

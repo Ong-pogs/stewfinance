@@ -5,6 +5,7 @@ import { Program } from "@coral-xyz/anchor";
 import { Stewfi } from "@/lib/idl";
 import { DrawSummary, claimDraw } from "@/lib/stewfi";
 import { fmtUsdc } from "@/lib/format";
+import { useToast } from "@/components/toast";
 
 export function ClaimCard({
   program,
@@ -17,6 +18,7 @@ export function ClaimCard({
   draws: DrawSummary[];
   onDone: () => void;
 }) {
+  const toast = useToast();
   const [claiming, setClaiming] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -34,13 +36,20 @@ export function ClaimCard({
 
   async function handleClaim() {
     if (!program || !walletPubkey) return;
+    const amountFmt = fmtUsdc(claimable!.winnerAmount);
     setClaiming(true);
     setError(null);
     try {
-      await claimDraw(program, walletPubkey, claimable!.round);
+      const sig = await claimDraw(program, walletPubkey, claimable!.round);
+      toast.success(`Claimed ${amountFmt} USDC`, {
+        description: `Round ${claimable!.round} prize sent to your wallet (devnet test prize).`,
+        txSig: sig,
+      });
       onDone();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      toast.error("Claim failed", { description: msg });
     } finally {
       setClaiming(false);
     }
