@@ -520,4 +520,87 @@ describe("computeBadges", () => {
     const badges = computeBadges(null, [wonDraw], null);
     expect(badges.every((b) => !b.earned)).toBe(true);
   });
+
+  // ── progress (current / target) ────────────────────────────────────────────
+
+  it("every badge exposes a numeric current and target", () => {
+    const pos = { amount: new BN(100_000_000), firstDepositTs: new BN(depositTs), withdrawRequestedAt: new BN(0), user: myKey };
+    const badges = computeBadges(pos, [], null);
+    for (const b of badges) {
+      expect(typeof b.current).toBe("number");
+      expect(typeof b.target).toBe("number");
+      expect(b.target).toBeGreaterThan(0);
+      expect(b.current).toBeGreaterThanOrEqual(0);
+      expect(b.current).toBeLessThanOrEqual(b.target); // capped for display
+    }
+  });
+
+  it("no position: all progress is 0 / target", () => {
+    const badges = computeBadges(null, [], null);
+    const firstPour = badges.find((b) => b.id === "first_pour")!;
+    const slow = badges.find((b) => b.id === "slow_cooker")!;
+    const feeder = badges.find((b) => b.id === "pot_feeder")!;
+    const held = badges.find((b) => b.id === "held_through_5")!;
+    expect(firstPour).toMatchObject({ current: 0, target: 1, earned: false });
+    expect(slow).toMatchObject({ current: 0, target: 4, earned: false });
+    expect(feeder).toMatchObject({ current: 0, target: 1, earned: false });
+    expect(held).toMatchObject({ current: 0, target: 5, earned: false });
+  });
+
+  it("partial progress: 2 weeks held → slow_cooker 2 / 4, unearned", () => {
+    const twoWeeksAgo = Math.floor(Date.now() / 1000) - 2 * 604_800 - 60;
+    const pos = { amount: new BN(100_000_000), firstDepositTs: new BN(twoWeeksAgo), withdrawRequestedAt: new BN(0), user: myKey };
+    const slow = computeBadges(pos, [], null).find((b) => b.id === "slow_cooker")!;
+    expect(slow.current).toBe(2);
+    expect(slow.target).toBe(4);
+    expect(slow.earned).toBe(false);
+  });
+
+  it("partial progress: held through 3 draws → held_through_5 3 / 5, unearned", () => {
+    const pos = { amount: new BN(100_000_000), firstDepositTs: new BN(depositTs), withdrawRequestedAt: new BN(0), user: myKey };
+    const threeDraws = Array.from({ length: 3 }, (_, i) =>
+      makeDraw(i + 1, depositTs + (i + 1) * 604_800),
+    );
+    const held = computeBadges(pos, threeDraws, null).find((b) => b.id === "held_through_5")!;
+    expect(held.current).toBe(3);
+    expect(held.target).toBe(5);
+    expect(held.earned).toBe(false);
+  });
+
+  it("earned first_pour reads current === target (1 / 1)", () => {
+    const pos = { amount: new BN(100_000_000), firstDepositTs: new BN(depositTs), withdrawRequestedAt: new BN(0), user: myKey };
+    const firstPour = computeBadges(pos, [], null).find((b) => b.id === "first_pour")!;
+    expect(firstPour.earned).toBe(true);
+    expect(firstPour.current).toBe(firstPour.target);
+    expect(firstPour.current).toBe(1);
+  });
+
+  it("earned pot_feeder reads current === target (win count capped at 1)", () => {
+    const pos = { amount: new BN(100_000_000), firstDepositTs: new BN(depositTs), withdrawRequestedAt: new BN(0), user: myKey };
+    // Two wins — current is capped at target (1) for display.
+    const feeder = computeBadges(pos, [wonDraw, { ...wonDraw, round: 2 }], null).find((b) => b.id === "pot_feeder")!;
+    expect(feeder.earned).toBe(true);
+    expect(feeder.current).toBe(1);
+    expect(feeder.target).toBe(1);
+  });
+
+  it("earned slow_cooker caps display at target (e.g. 6 weeks → 4 / 4)", () => {
+    const sixWeeksAgo = Math.floor(Date.now() / 1000) - 6 * 604_800;
+    const pos = { amount: new BN(100_000_000), firstDepositTs: new BN(sixWeeksAgo), withdrawRequestedAt: new BN(0), user: myKey };
+    const slow = computeBadges(pos, [], null).find((b) => b.id === "slow_cooker")!;
+    expect(slow.earned).toBe(true);
+    expect(slow.current).toBe(4);
+    expect(slow.target).toBe(4);
+  });
+
+  it("earned held_through_5 caps display at target (6 draws → 5 / 5)", () => {
+    const pos = { amount: new BN(100_000_000), firstDepositTs: new BN(depositTs), withdrawRequestedAt: new BN(0), user: myKey };
+    const sixDraws = Array.from({ length: 6 }, (_, i) =>
+      makeDraw(i + 1, depositTs + (i + 1) * 604_800),
+    );
+    const held = computeBadges(pos, sixDraws, null).find((b) => b.id === "held_through_5")!;
+    expect(held.earned).toBe(true);
+    expect(held.current).toBe(5);
+    expect(held.target).toBe(5);
+  });
 });

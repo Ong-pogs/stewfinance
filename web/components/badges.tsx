@@ -64,13 +64,34 @@ function BadgePill({ badge }: { badge: Badge }) {
     );
   }
 
+  const pct =
+    badge.target > 0 ? Math.min(100, Math.round((badge.current / badge.target) * 100)) : 0;
+
   return (
     <div
-      className="rounded-lg border border-border bg-card px-3 py-2 opacity-50"
+      className="rounded-lg border border-border bg-card px-3 py-2"
       title={badge.hint}
     >
-      <div className="text-xs font-semibold text-muted-foreground">{badge.label}</div>
+      <div className="flex items-baseline justify-between gap-2">
+        <div className="text-xs font-semibold text-muted-foreground">{badge.label}</div>
+        <div className="text-[10px] font-medium tabular-nums text-muted-foreground/80">
+          {badge.current} / {badge.target}
+        </div>
+      </div>
       <div className="mt-0.5 text-[10px] text-muted-foreground/70 leading-snug">{badge.hint}</div>
+      <div
+        className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-secondary"
+        role="progressbar"
+        aria-valuenow={badge.current}
+        aria-valuemin={0}
+        aria-valuemax={badge.target}
+        aria-label={`${badge.label}: ${badge.current} of ${badge.target}`}
+      >
+        <div
+          className="h-full rounded-full bg-primary transition-[width] duration-500 ease-out motion-reduce:transition-none"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
     </div>
   );
 }

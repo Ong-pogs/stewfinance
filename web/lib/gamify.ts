@@ -239,6 +239,10 @@ export type Badge = {
   label: string;
   earned: boolean;
   hint: string;
+  /** Progress toward earning: how far along the user is (capped at target for display). */
+  current: number;
+  /** Progress toward earning: the threshold that earns the badge. */
+  target: number;
 };
 
 type PoolLike = { totalPrincipal: BN } | null | undefined;
@@ -247,11 +251,11 @@ type PoolLike = { totalPrincipal: BN } | null | undefined;
  * Return descriptive badges derived from on-chain facts.
  * Badges NEVER grant or imply changed draw weight — they are cosmetic labels only.
  *
- * IDs / conditions:
- *   first_pour       amount > 0
- *   slow_cooker      weeksHeld >= 4
- *   pot_feeder       connected wallet won ≥1 settled draw in `draws`
- *   held_through_5   drawsHeldThrough >= 5
+ * IDs / conditions (earned) + progress (current/target, capped for display):
+ *   first_pour       amount > 0                                  (1 / 1)
+ *   slow_cooker      weeksHeld >= 4                              (weeksHeld / 4)
+ *   pot_feeder       connected wallet won ≥1 settled draw        (wins / 1)
+ *   held_through_5   drawsHeldThrough >= 5                       (drawsHeldThrough / 5)
  */
 export function computeBadges(
   position: PositionLike | null | undefined,
@@ -267,40 +271,68 @@ export function computeBadges(
 
   const hasDeposit = !!position && position.amount.gtn(0);
 
-  // pot_feeder: wallet address of current position appears as winner in any settled draw.
+  // pot_feeder: wallet address of current position appears as winner in settled draws.
   // We derive this from the draws list; the caller must pass draws that include the winner field.
-  const wonADraw = draws.some(
-    (d) =>
-      d.status === "settled" &&
-      !!position &&
-      // DrawSummary.winner is a PublicKey; compare via toString()
-      d.winner.toString() === (position as { user?: { toString(): string } } & PositionLike).user?.toString(),
-  );
+  const myAddr = (position as { user?: { toString(): string } } & PositionLike)?.user?.toString();
+  const wins = !myAddr
+    ? 0
+    : draws.filter((d) => d.status === "settled" && d.winner.toString() === myAddr).length;
+
+  // Honest progress mapping from REAL data only. `current` is capped at `target`
+  // for display so a bar never overflows; earned badges read current === target.
+  const HELD_THROUGH_TARGET = 5;
+  const SLOW_COOKER_TARGET = 4;
+
+  const withProgress = (
+    badge: Omit<Badge, "current" | "target">,
+    rawCurrent: number,
+    target: number,
+  ): Badge => ({
+    ...badge,
+    current: Math.min(Math.max(0, rawCurrent), target),
+    target,
+  });
 
   return [
-    {
-      id: "first_pour",
-      label: "First Pour",
-      earned: hasDeposit,
-      hint: "Made your first deposit into the pool.",
-    },
-    {
-      id: "slow_cooker",
-      label: "Slow Cooker",
-      earned: streak.weeksHeld >= 4,
-      hint: "Held through 4+ weeks — your entries keep climbing.",
-    },
-    {
-      id: "pot_feeder",
-      label: "Pot Feeder",
-      earned: wonADraw,
-      hint: "Won at least one weekly draw — a share went to the growing pot too.",
-    },
-    {
-      id: "held_through_5",
-      label: "Held Through 5",
-      earned: streak.drawsHeldThrough >= 5,
-      hint: "Position stayed open through 5 or more weekly draws.",
-    },
+    withProgress(
+      {
+        id: "first_pour",
+        label: "First Pour",
+        earned: hasDeposit,
+        hint: "Made your first deposit into the pool.",
+      },
+      hasDeposit ? 1 : 0,
+      1,
+    ),
+    withProgress(
+      {
+        id: "slow_cooker",
+        label: "Slow Cooker",
+        earned: streak.weeksHeld >= SLOW_COOKER_TARGET,
+        hint: "Held through 4+ weeks — your entries keep climbing.",
+      },
+      streak.weeksHeld,
+      SLOW_COOKER_TARGET,
+    ),
+    withProgress(
+      {
+        id: "pot_feeder",
+        label: "Pot Feeder",
+        earned: wins >= 1,
+        hint: "Won at least one weekly draw — a share went to the growing pot too.",
+      },
+      wins,
+      1,
+    ),
+    withProgress(
+      {
+        id: "held_through_5",
+        label: "Held Through 5",
+        earned: streak.drawsHeldThrough >= HELD_THROUGH_TARGET,
+        hint: "Position stayed open through 5 or more weekly draws.",
+      },
+      streak.drawsHeldThrough,
+      HELD_THROUGH_TARGET,
+    ),
   ];
 }
