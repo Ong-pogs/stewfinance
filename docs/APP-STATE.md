@@ -24,7 +24,8 @@ StewFi is a **no-loss prize savings** dApp on Solana. You deposit USDC; your pri
 
 ## 5. Frontend
 - **Pages:** `/` pitch (landing hero + last-winner spotlight + FAQ + **interactive fairness explainer**), `/app` the product (connected funnel), `/dashboard` funnel analytics, **`/verify`** (provably-fair: VRF value → ticket derivation → winner per round, explorer links), **`/stats`** (TVL + Growing Pot + members tiles + inline-SVG prize-history chart), **`/share`** (OG-unfurl page for shared wins/pot). API: `/api/faucet`, `/api/track`, `/api/leaderboard`, `/api/activity`, **`/api/og`** (branded 1200×630 share image, win/pot/join).
-- **Deposit UX:** wallet test-USDC balance + "Max" button; pot-ticker animates a count-up on value change. Draw card escalates to a "draw day" hype/countdown state when the draw is ≤6h out.
+- **Deposit UX:** wallet test-USDC balance + "Max" button; pot-ticker count-up on value change. Draw card escalates to a "draw day" hype/countdown when the draw is ≤6h out.
+- **Personal/extras:** badges show **progress bars** (current/target); your-activity has an **odds-projection** chart (honest "assumes pool unchanged"); app is **installable (PWA)** — generated branded icons, manifest, offline app-shell (SW bypasses `/api` so on-chain data stays fresh).
 - **`/app` layout (responsive blend):** Pot hero → 2-col core (Your position + Deposit/Withdraw | This-week draw) on desktop, single column on phone → tabbed Leaderboard / Badges / History.
 - **Components** (`web/components/`): pot-ticker, this-week (consolidated draw+odds+sim-preview), position-card, deposit-card, withdraw-card, claim-card, share-card (win + pre-deposit X intents), draw-reveal (cauldron animation), leaderboard, badges, draw-history, secondary-tabs (Leaderboard/Badges/History/Activity), devnet-banner, connect-button, **toast** (in-house toasts + explorer links), **skeletons**, **empty-state** (+ retry), **theme-toggle**/**theme-provider** (light/dark), **activity-feed** + **your-activity**. Extra API: `/api/activity` (recent events). `gamify.ts` gained `poolMemberSubset`.
 - **Lib** (`web/lib/`): `stewfi.ts` (program client: readPool/readPosition/readDraw/readCurrentDraw/listDraws/readAllPositions/deposit/withdraw/claimDraw — all `.accountsPartial`), `gamify.ts` (computeOdds/weeksHeld/potEstimate/computeStreak/computeBadges, unit-tested), `pdas.ts`, `format.ts`, `draw-utils.ts`, `track.ts`, `supabase.ts`, `constants.ts`, `idl.ts`.
@@ -68,9 +69,9 @@ Run a live draw: re-arm `scripts/devnet-draw-setup.ts` then `scripts/devnet-draw
 
 ## 11. Candidate features to consider (menu — pick what to build)
 _(✅ shipped 2026-06-07: toasts+skeletons; light/dark toggle; recent-activity + your-activity; leaderboard filter; faucet hardening; deposit balance+Max; pot count-up; **/verify provably-fair page**; **/stats page + prize chart**; draw-day hype state; pitch winner spotlight.)_
-_(✅ also 2026-06-07: FAQ; branded OG share image + /share unfurl; interactive fairness explainer.)_
-**UX / polish:** PWA/installable; richer themed connect modal; in-app "?" tooltips.
-**Engagement / retention:** streak reminders/notifications; milestone badges with progress bars; deeper personal stats (odds-over-time chart).
+_(✅ also 2026-06-07: FAQ; OG share image + /share unfurl; interactive explainer; badge progress bars; odds-projection chart; PWA/installable.)_
+**UX / polish:** richer themed connect modal; in-app "?" tooltips; full keyboard/a11y pass.
+**Engagement / retention:** streak reminders/notifications; deeper personal stats history.
 **Social / viral:** referral dashboard polish; embeddable pot widget; winner-spotlight carousel.
 **Infra / launch:** auto-scheduler (cron draws); Supabase wiring + Vercel deploy; fresh launch pool; _(contract)_ pool-scoped UserPosition; _(contract)_ real referral odds-boost.
 
