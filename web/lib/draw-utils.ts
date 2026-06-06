@@ -8,6 +8,23 @@ export function formatCountdown(secs: number): string {
   return `${d}:${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
+/**
+ * True when the next draw is imminent: in the future but within `thresholdSecs`.
+ *
+ * Pure helper for the "draw day" hype state. Returns false when the time is
+ * already past (≤ now) — a fired/overdue draw is not "soon" — and false for a
+ * non-positive or missing timestamp. Inputs are unix seconds.
+ */
+export function isDrawSoon(
+  nextDrawTs: number | null | undefined,
+  nowTs: number,
+  thresholdSecs: number,
+): boolean {
+  if (!nextDrawTs || nextDrawTs <= 0) return false;
+  const secsLeft = nextDrawTs - nowTs;
+  return secsLeft > 0 && secsLeft <= thresholdSecs;
+}
+
 /** Human-readable label for the DrawStatus Anchor enum key. */
 export function statusLabel(status: string): string {
   switch (status) {

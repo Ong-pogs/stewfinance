@@ -2,8 +2,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { BN } from "@coral-xyz/anchor";
 import { fmtUsdc } from "@/lib/format";
-import { formatCountdown, statusLabel } from "@/lib/draw-utils";
+import { formatCountdown, statusLabel, isDrawSoon } from "@/lib/draw-utils";
 import { computeOdds } from "@/lib/gamify";
+
+/**
+ * "Draw day" escalation threshold. When the draw is `pending` AND its
+ * next_draw_ts is within this many seconds, the card switches from the calm
+ * state to a prominent live-countdown hype state. 6 hours.
+ */
+const DRAW_SOON_THRESHOLD_SECS = 6 * 3600;
 
 /**
  * ThisWeek — the single "this week's draw" card.
@@ -73,6 +80,21 @@ export function ThisWeek({
     return () => clearInterval(id);
   }, [nextDrawTs]);
 
+  // ── "Draw day" hype state ─────────────────────────────────────────────────
+  // Escalate ONLY while the draw is pending (pre-commit) AND within the
+  // threshold. committed/settled/claimed keep their existing brewing/reveal
+  // handling untouched. `secsLeft` ticks every second, so this re-evaluates
+  // live and falls back to calm the moment the threshold/status no longer holds.
+  const isPending = draw?.status === "pending";
+  const drawSoon =
+    isPending &&
+    secsLeft > 0 &&
+    isDrawSoon(
+      nextDrawTs ? nextDrawTs.toNumber() : null,
+      Math.floor(Date.now() / 1000),
+      DRAW_SOON_THRESHOLD_SECS,
+    );
+
   // Prize estimate: snapshotted prizePool once a draw is committed/settled/claimed.
   const prizeSnapped =
     draw && (draw.status === "committed" || draw.status === "settled" || draw.status === "claimed")
@@ -119,7 +141,13 @@ export function ThisWeek({
   }
 
   return (
-    <div className="rounded-[--radius] border border-border bg-card p-5">
+    <div
+      className={`rounded-[--radius] border bg-card p-5 ${
+        drawSoon
+          ? "border-accent-warm animate-cauldron-bubble"
+          : "border-border"
+      }`}
+    >
       {/* Header — title + status chip */}
       <div className="flex items-center justify-between">
         <div className="text-sm text-muted-foreground">This week&apos;s draw</div>
@@ -162,16 +190,32 @@ export function ThisWeek({
         </div>
       )}
 
-      {/* Countdown (was DrawCard) */}
+      {/* Countdown (was DrawCard) — escalates to a "draw day" state when soon */}
       {nextDrawTs && nextDrawTs.gtn(0) && (
         <div className="mt-4">
+          {drawSoon && (
+            <p className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-secondary px-2.5 py-1 text-xs font-semibold text-accent-warm">
+              <span aria-hidden="true">⏳</span> Draw day — closing soon
+            </p>
+          )}
           <div className="text-xs text-muted-foreground mb-1">
             {secsLeft > 0 ? "Next draw in" : "Draw ready"}
           </div>
-          <div className="font-mono tabular-nums text-2xl font-bold text-foreground">
+          <div
+            className={`font-mono tabular-nums font-bold ${
+              drawSoon ? "text-4xl text-accent-warm" : "text-2xl text-foreground"
+            }`}
+          >
             {secsLeft > 0 ? formatCountdown(secsLeft) : "0:00:00:00"}
           </div>
           <div className="text-xs text-muted-foreground mt-0.5">D:HH:MM:SS</div>
+          {drawSoon && (
+            <p className="mt-2 text-xs leading-snug text-foreground/80">
+              {hasDeposit
+                ? "You're in this week's draw — your weight keeps climbing as your deposit ages. Deposits stay open until the draw commits."
+                : "Deposit before the draw commits to be in this week's prize. Your principal is never at risk."}
+            </p>
+          )}
         </div>
       )}
 
