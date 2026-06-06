@@ -10,22 +10,37 @@ export type ShareCardProps = {
   wallet?: string;
 };
 
+// The link the tweet carries → our /share page (NOT /app directly), so X
+// fetches /share's OG metadata and unfurls the branded /api/og card. We keep
+// the referral via ?ref= and forward the card params (kind/round/amount/pot).
+// The /share "Open the app" CTA preserves ?ref= into /app, so referral
+// attribution still lands. `og` kind maps the UI mode onto the image's kinds:
+// a "win" stays "win"; a "pre-deposit" share is the "join" card.
+function buildShareUrl(props: ShareCardProps): string {
+  const origin =
+    typeof window !== "undefined" ? window.location.origin : "";
+  const kind = props.mode === "win" ? "win" : "join";
+  const qs = new URLSearchParams({ kind, ref: props.referralCode });
+  if (props.mode === "win") {
+    if (props.round !== undefined) qs.set("round", String(props.round));
+    if (props.amount !== undefined) qs.set("amount", props.amount);
+  }
+  return `${origin}/share?${qs.toString()}`;
+}
+
 function buildTweetText(props: ShareCardProps): string {
-  const refUrl =
-    typeof window !== "undefined"
-      ? `${window.location.origin}/app?ref=${props.referralCode}`
-      : `/app?ref=${props.referralCode}`;
+  const shareUrl = buildShareUrl(props);
 
   if (props.mode === "win") {
     return (
       `Won Round ${props.round ?? "?"} on StewFi 🔮 ${props.amount ?? "?"} USDC — ` +
-      `principal never moved, and the pot keeps growing. ${refUrl}`
+      `principal never moved, and the pot keeps growing. ${shareUrl}`
     );
   }
   // pre-deposit
   return (
     `Just joined the StewFi pool — save USDC, the interest is the prize, ` +
-    `principal stays mine. Pot's at ${props.potUsdc ?? "?"} and climbing 🔮 ${refUrl}`
+    `principal stays mine. Pot's at ${props.potUsdc ?? "?"} and climbing 🔮 ${shareUrl}`
   );
 }
 
