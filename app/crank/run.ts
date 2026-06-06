@@ -35,7 +35,7 @@
  * structured events. Use the `level` field for filtering.
  */
 import * as fs from "fs";
-import * as path from "path";
+import { expandHome } from "./paths";
 
 import {
   Connection,
@@ -104,9 +104,7 @@ interface CrankConfig {
 }
 
 function readKeypair(filepath: string): Keypair {
-  const expanded = filepath.startsWith("~")
-    ? path.join(process.env.HOME ?? "", filepath.slice(1))
-    : filepath;
+  const expanded = expandHome(filepath);
   const raw = fs.readFileSync(expanded, "utf-8");
   const arr = JSON.parse(raw);
   if (!Array.isArray(arr)) {
