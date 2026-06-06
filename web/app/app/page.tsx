@@ -340,6 +340,7 @@ export default function AppPage() {
             leaderboard={
               <Leaderboard
                 positions={positions}
+                totalPrincipal={pool ? (pool.totalPrincipal as BN) : null}
                 walletPubkey={wallet.publicKey ?? null}
               />
             }

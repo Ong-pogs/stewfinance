@@ -1,8 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import {
+  Connection,
+  Keypair,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+} from "@solana/web3.js";
 import { createAssociatedTokenAccountIdempotent, mintTo } from "@solana/spl-token";
 
 const FAUCET_AMOUNT = Number(process.env.FAUCET_AMOUNT ?? "100") * 1_000_000; // 6 dec
+const SOL_TOPUP_THRESHOLD = 10_000_000; // 0.01 SOL — below this, top the wallet up
+const SOL_TOPUP_AMOUNT = 20_000_000; // 0.02 SOL — enough for rent + a few txs
 const seen = new Map<string, number>(); // wallet -> last mint ms (per-instance rate limit)
 
 export async function POST(req: NextRequest) {
@@ -17,15 +25,34 @@ export async function POST(req: NextRequest) {
     const mint = new PublicKey(process.env.NEXT_PUBLIC_USDC_MINT!);
     const authority = Keypair.fromSecretKey(
       Uint8Array.from(JSON.parse(process.env.FAUCET_MINT_AUTHORITY_SECRET!)));
-    // give a little SOL too if the wallet is empty (rent + fees)
-    const bal = await conn.getBalance(user);
-    if (bal < 5_000_000) {
-      try { await conn.confirmTransaction(await conn.requestAirdrop(user, 50_000_000)); } catch {}
+
+    // Give a little SOL too if the wallet is low (rent + tx fees). Devnet
+    // requestAirdrop is rate-limited and flaky, so fund directly from the
+    // faucet authority via SystemProgram.transfer. Best-effort: a transfer
+    // failure must NOT block the USDC mint below.
+    let solSig: string | null = null;
+    try {
+      const bal = await conn.getBalance(user);
+      if (bal < SOL_TOPUP_THRESHOLD) {
+        const tx = new Transaction().add(
+          SystemProgram.transfer({
+            fromPubkey: authority.publicKey,
+            toPubkey: user,
+            lamports: SOL_TOPUP_AMOUNT,
+          }),
+        );
+        solSig = await conn.sendTransaction(tx, [authority]);
+        await conn.confirmTransaction(solSig, "confirmed");
+      }
+    } catch {
+      // swallow — USDC mint is the primary purpose of the faucet
+      solSig = null;
     }
+
     const ata = await createAssociatedTokenAccountIdempotent(conn, authority, mint, user);
     const sig = await mintTo(conn, authority, mint, ata, authority, FAUCET_AMOUNT);
     seen.set(wallet, Date.now());
-    return NextResponse.json({ ok: true, sig });
+    return NextResponse.json({ ok: true, sig, solSig });
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 500 });
   }

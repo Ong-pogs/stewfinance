@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { BN } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
-import { computeOdds, weeksHeld, potEstimate, computeStreak, computeBadges } from "../lib/gamify";
+import { computeOdds, weeksHeld, potEstimate, computeStreak, computeBadges, poolMemberSubset } from "../lib/gamify";
 import type { DrawSummary } from "../lib/stewfi";
 
 // ── Regression: computeOdds must reproduce simulated-draw.tsx numbers ────────
@@ -210,6 +210,80 @@ describe("computeStreak", () => {
     expect(result.drawsHeldThrough).toBe(0);
     expect(result.weeksHeld).toBe(0);
     expect(result.active).toBe(false);
+  });
+});
+
+// ── poolMemberSubset ──────────────────────────────────────────────────────────
+
+describe("poolMemberSubset", () => {
+  const usdc = (n: number) => new BN(n * 1_000_000);
+
+  // Helper: build a minimal position with a distinct user key for identity checks.
+  let keyCounter = 0;
+  function pos(amountUsdc: number) {
+    // Deterministic distinct pubkeys derived from a counter byte.
+    const bytes = new Uint8Array(32);
+    bytes[0] = ++keyCounter;
+    return {
+      user: new PublicKey(bytes),
+      amount: usdc(amountUsdc),
+      firstDepositTs: new BN(1_700_000_000),
+      withdrawRequestedAt: new BN(0),
+    };
+  }
+
+  it("drops strays — reconciles the demo pool to its 4 real members", () => {
+    // Mirrors the live demo pool: two 150 strays + 50 + three 10s; real = 80.
+    const positions = [
+      pos(10),
+      pos(150), // stray
+      pos(50),
+      pos(10),
+      pos(10),
+      pos(150), // stray
+    ];
+    const totalPrincipal = usdc(80); // on-chain pool total
+    const members = poolMemberSubset(positions, totalPrincipal);
+
+    // Exactly the 4 real members (50 + 10 + 10 + 10), strays dropped.
+    expect(members).toHaveLength(4);
+    const sum = members.reduce((acc, p) => acc.add(p.amount), new BN(0));
+    expect(sum.toString()).toBe(totalPrincipal.toString());
+    // No 150-USDC stray survives.
+    expect(members.some((p) => p.amount.eq(usdc(150)))).toBe(false);
+  });
+
+  it("returns all when the full set already reconciles", () => {
+    const positions = [pos(50), pos(10), pos(20)];
+    const members = poolMemberSubset(positions, usdc(80));
+    expect(members).toHaveLength(3);
+  });
+
+  it("graceful fallback — no clean subset returns ALL positions unchanged", () => {
+    // No subset of {150, 150, 10} sums to 80.
+    const positions = [pos(150), pos(150), pos(10)];
+    const members = poolMemberSubset(positions, usdc(80));
+    expect(members).toHaveLength(3);
+    expect(members).toEqual(positions); // unchanged
+  });
+
+  it("graceful fallback — N over the cap returns all unchanged", () => {
+    // 3 positions, cap of 2 → can't brute-force → return all.
+    const positions = [pos(10), pos(20), pos(50)];
+    const members = poolMemberSubset(positions, usdc(30), 2);
+    expect(members).toHaveLength(3);
+    expect(members).toEqual(positions);
+  });
+
+  it("empty input returns an empty array", () => {
+    expect(poolMemberSubset([], usdc(80))).toHaveLength(0);
+  });
+
+  it("does not mutate the input array", () => {
+    const positions = [pos(10), pos(150), pos(50), pos(10), pos(10), pos(150)];
+    const snapshot = [...positions];
+    poolMemberSubset(positions, usdc(80));
+    expect(positions).toEqual(snapshot);
   });
 });
 

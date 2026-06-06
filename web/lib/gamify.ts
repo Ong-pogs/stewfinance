@@ -71,6 +71,65 @@ export type PositionLike = {
   withdrawRequestedAt: BN;
 };
 
+// ── poolMemberSubset ──────────────────────────────────────────────────────────
+
+/**
+ * Recover THIS pool's real member set from a list of `UserPosition`s.
+ *
+ * `UserPosition` PDAs are keyed per-USER (not per-pool), so a global read can
+ * include stray positions from other (e.g. old smoke-test) pools. We recover
+ * the true member set by selecting the subset whose `amount` values sum EXACTLY
+ * to the pool's on-chain `totalPrincipal`. This mirrors how
+ * `scripts/devnet-draw.ts` reconciles members against the on-chain accumulator
+ * (there it sums weights to `total_weight`; here we sum principal amounts to
+ * `totalPrincipal`).
+ *
+ * Brute-force subset-sum (O(2^n)) is fine for the small N we ever read here.
+ *
+ * Graceful fallback — returns ALL positions unchanged when:
+ *   - N exceeds the cap (CAP, default 22), or
+ *   - no exact subset sums to totalPrincipal.
+ *
+ * Pure function. Returns a new array (never mutates the input).
+ */
+const POOL_SUBSET_CAP = 22;
+
+export function poolMemberSubset<T extends { amount: BN }>(
+  positions: T[],
+  totalPrincipal: BN,
+  cap: number = POOL_SUBSET_CAP,
+): T[] {
+  const n = positions.length;
+  // Trivial cases: empty, or the whole set already reconciles.
+  if (n === 0) return [...positions];
+
+  // Fast path: the full set already sums to the target → all are members.
+  const fullSum = positions.reduce((acc, p) => acc.add(p.amount), new BN(0));
+  if (fullSum.eq(totalPrincipal)) return [...positions];
+
+  // Too many to brute-force → graceful fallback (return all unchanged).
+  if (n > cap) return [...positions];
+
+  // Search non-empty subsets. (A target of 0 with a non-empty pool would only
+  // match the empty subset, so we leave it to the fallback below.)
+  for (let mask = 1; mask < 1 << n; mask++) {
+    let sum = new BN(0);
+    for (let i = 0; i < n; i++) {
+      if (mask & (1 << i)) sum = sum.add(positions[i].amount);
+    }
+    if (sum.eq(totalPrincipal)) {
+      const subset: T[] = [];
+      for (let i = 0; i < n; i++) {
+        if (mask & (1 << i)) subset.push(positions[i]);
+      }
+      return subset;
+    }
+  }
+
+  // No clean subset found → graceful fallback (return all unchanged).
+  return [...positions];
+}
+
 // ── computeStreak ─────────────────────────────────────────────────────────────
 
 /**

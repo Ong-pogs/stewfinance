@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { BN } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import { abbrev, fmtUsdc } from "@/lib/format";
-import { weeksHeld } from "@/lib/gamify";
+import { weeksHeld, poolMemberSubset } from "@/lib/gamify";
 import type { LeaderboardEntry } from "@/app/api/leaderboard/route";
 
 export type PositionRow = {
@@ -25,9 +25,11 @@ const TOP_N = 10;
 
 export function Leaderboard({
   positions,
+  totalPrincipal,
   walletPubkey,
 }: {
   positions: PositionRow[];
+  totalPrincipal: BN | null;
   walletPubkey: PublicKey | null;
 }) {
   const [tab, setTab] = useState<Tab>("amount");
@@ -56,13 +58,24 @@ export function Leaderboard({
     return ref === walletPubkey.toBase58();
   }
 
+  // ── Pool-member reconciliation ────────────────────────────────────────────
+  // UserPosition PDAs are per-user (not per-pool), so `positions` can include
+  // stray rows from old smoke-test pools. Rank over the subset whose amounts
+  // sum to the pool's totalPrincipal — the real members. If reconciliation
+  // can't run (no total) or finds no clean subset, fall back to raw positions.
+  const members =
+    totalPrincipal !== null
+      ? poolMemberSubset(positions, totalPrincipal)
+      : positions;
+  const reconciled = members.length !== positions.length;
+
   // ── Sorted slices ────────────────────────────────────────────────────────
 
-  const byAmount = [...positions]
+  const byAmount = [...members]
     .sort((a, b) => b.amount.cmp(a.amount))
     .slice(0, TOP_N);
 
-  const byWeeks = [...positions]
+  const byWeeks = [...members]
     .sort(
       (a, b) =>
         weeksHeld(b.firstDepositTs, nowTs) -
@@ -125,7 +138,8 @@ export function Leaderboard({
                 </div>
               ))}
           <p className="mt-2 text-[10px] text-muted-foreground">
-            Ranked by pool balance. Position size and time held determine draw weight — not rank.
+            {reconciled ? "Ranked by pool balance." : "Ranked by position size."}{" "}
+            Position size and time held determine draw weight — not rank.
           </p>
         </div>
       )}
