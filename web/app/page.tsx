@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { useEffect } from "react";
 import { track } from "@/lib/track";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 const STEPS = [
   {
@@ -30,9 +31,14 @@ export default function Home() {
         {/* Single warm pearl halo behind the headline. */}
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute -top-32 right-[-12rem] h-[36rem] w-[36rem] rounded-full opacity-50 blur-3xl mix-blend-screen"
+          className="pointer-events-none absolute -top-32 right-[-12rem] h-[36rem] w-[36rem] rounded-full opacity-70 blur-3xl mix-blend-multiply dark:opacity-50 dark:mix-blend-screen"
           style={{ background: "var(--gradient-halo)" }}
         />
+
+        {/* Theme toggle — top-right of the pitch/landing hero. */}
+        <div className="absolute right-4 top-4 z-10 sm:right-6 sm:top-6">
+          <ThemeToggle />
+        </div>
 
         <div className="relative mx-auto max-w-3xl px-6 py-24 text-center sm:py-32">
           <p className="mb-6 inline-flex items-center gap-2 rounded-full border border-border bg-card/60 px-3 py-1 text-xs font-medium text-muted-foreground backdrop-blur">

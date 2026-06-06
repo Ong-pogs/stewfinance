@@ -3,15 +3,67 @@
 @tailwind utilities;
 
 /* ---------------------------------------------------------------------------
- * StewFi app theme — Linen Pearl DARK (ported from stewfinance-landing)
- * Warm near-black surfaces + warm-brown/tan accents. DARK-ONLY (no toggle).
- * Token values copied verbatim from the landing's `.dark` block:
+ * StewFi app theme — Linen Pearl (ported from stewfinance-landing)
+ * Warm cream paper + subtle pearl iridescence. Ships BOTH modes via
+ * next-themes (attribute="class"): `:root` = LIGHT (canonical), `.dark` = DARK.
+ * Dark remains the DEFAULT (set in the ThemeProvider) so the app opens dark.
+ *
+ * Light token values copied from the landing's `:root` light block:
+ *   /Users/ongeeshen/Project/stewfinance-landing/app/globals.css lines 12-48
+ * Dark token values copied from the landing's `.dark` block:
  *   /Users/ongeeshen/Project/stewfinance-landing/app/globals.css lines 50-78
- * (set here as the default :root since the app is dark-only).
- * --gradient-* are the dark-pearl hero/CTA gradients per the redesign spec.
+ * Both blocks define the same var names so every component works unchanged.
+ *
+ * --gradient-halo / --gradient-text flip per mode (cream conic + dark-brown
+ * text in light; warm-brown conic + tan text in dark). Halo elements blend
+ * `multiply` in light and `screen` in dark (see the `dark:` utilities in the
+ * hero markup). `--accent-warm` is the only var the landing lacks — adapted
+ * here: a deep warm-brown in light (reads on white cards), bright tan in dark.
  * --------------------------------------------------------------------------- */
 
 :root {
+  /* Linen Pearl — LIGHT (canonical) */
+  --background: oklch(0.97 0.012 80);     /* warm cream     ~#F8F2E8 */
+  --foreground: oklch(0.16 0.012 50);     /* warm near-black ~#1F1A10 */
+
+  --card: oklch(1 0 0);                    /* white card */
+  --card-foreground: oklch(0.16 0.012 50);
+
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.16 0.012 50);
+
+  --primary: oklch(0.30 0.04 50);          /* warm brown     ~#3F3830 */
+  --primary-foreground: oklch(0.98 0 0);   /* near-white on brown */
+
+  --secondary: oklch(0.93 0.015 80);
+  --secondary-foreground: oklch(0.16 0.012 50);
+
+  --muted: oklch(0.94 0.014 80);
+  --muted-foreground: oklch(0.45 0.018 50);
+
+  --accent: oklch(0.92 0.014 65);
+  --accent-foreground: oklch(0.16 0.012 50);
+  --accent-warm: oklch(0.42 0.055 55);     /* deep warm-brown for big numbers on white */
+
+  --destructive: oklch(0.55 0.22 25);
+  --destructive-foreground: oklch(0.98 0 0);
+
+  --border: oklch(0.89 0.018 80);
+  --input: oklch(0.95 0.014 80);
+  --ring: oklch(0.30 0.04 50);
+
+  --radius: 0.5rem;                        /* 8px base; sm/md/lg scale below */
+
+  /* Gradients — hero/CTA/halo only, NOT body UI (cream-pearl, multiply-blend). */
+  --gradient-primary: linear-gradient(135deg, #6B5A47 0%, #5A4838 50%, #4D3D2E 100%);
+  --gradient-halo: conic-gradient(from 0deg, #FAF0E0, #FFE8D5, #FFE5D0, #F8E5C8, #FAEFD8, #FAF0E0);
+  --gradient-text: linear-gradient(90deg, #3F3830 0%, #4D4136 50%, #5A4838 100%);
+
+  /* Subtle warm glow — reserved for the pot hero + draw-reveal only. */
+  --glow-warm: oklch(0.42 0.055 55);
+}
+
+.dark {
   --background: oklch(0.13 0.015 70);     /* warm near-black  ~#181410 */
   --foreground: oklch(0.97 0.01 70);      /* warm off-white   ~#F4EFE7 */
 
@@ -34,14 +86,12 @@
   --accent-foreground: oklch(0.97 0.01 70);
   --accent-warm: oklch(0.82 0.06 60);     /* brighter tan for big numbers ~#D8C3A0 */
 
-  --destructive: oklch(0.55 0.22 25);     /* errors */
+  --destructive: oklch(0.65 0.22 25);     /* errors (matches landing dark) */
   --destructive-foreground: oklch(0.98 0 0);
 
   --border: oklch(0.26 0.025 70);         /* ~#383026 */
   --input: oklch(0.18 0.02 70);
   --ring: oklch(0.74 0.05 50);
-
-  --radius: 0.5rem;                        /* 8px base; sm/md/lg scale below */
 
   /* Gradients — hero/CTA/halo only, NOT body UI (dark-pearl, screen-blend). */
   --gradient-primary: linear-gradient(135deg, #6B5A47, #5A4838, #4D3D2E);
@@ -99,8 +149,14 @@ body {
 .wallet-adapter-button-trigger {
   background: var(--secondary) !important;
 }
+/* Desaturate the wallet icons to match the monochrome pill. Light mode keeps
+ * them dark (no brightening); dark mode brightens so they read on the dark pill. */
 .wallet-adapter-button .wallet-adapter-button-start-icon,
 .wallet-adapter-button .wallet-adapter-button-end-icon {
+  filter: saturate(0) brightness(0.55);
+}
+.dark .wallet-adapter-button .wallet-adapter-button-start-icon,
+.dark .wallet-adapter-button .wallet-adapter-button-end-icon {
   filter: saturate(0) brightness(1.4);
 }
 

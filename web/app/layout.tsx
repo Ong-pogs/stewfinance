@@ -18,6 +18,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html
       lang="en"
+      // next-themes sets the theme class on <html> before hydration; suppress
+      // the resulting server/client className mismatch warning (no FOUC).
+      suppressHydrationWarning
       className={`${GeistSans.variable} ${GeistMono.variable}`}
     >
       <body className="min-h-screen bg-background text-foreground font-sans antialiased">

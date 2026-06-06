@@ -4,6 +4,7 @@ import { AnchorProvider, BN, Program } from "@coral-xyz/anchor";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { ConnectButton } from "@/components/connect-button";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { DepositCard } from "@/components/deposit-card";
 import { PositionCard } from "@/components/position-card";
 import { WithdrawCard } from "@/components/withdraw-card";
@@ -154,12 +155,15 @@ export default function AppPage() {
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-12">
-      {/* (a) Top bar — wordmark + wallet */}
+      {/* (a) Top bar — wordmark + theme toggle + wallet */}
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-bold">
           <span className="bg-[image:--gradient-text] bg-clip-text text-transparent">StewFi</span>
         </h1>
-        <ConnectButton />
+        <div className="flex items-center gap-2">
+          <ThemeToggle />
+          <ConnectButton />
+        </div>
       </div>
       {!wallet.connected ? (
         /* Disconnected hero — pitch line + live pot teaser + prominent connect. */
@@ -167,7 +171,7 @@ export default function AppPage() {
           {/* Single warm pearl halo behind the teaser. */}
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 top-1/2 mx-auto h-[22rem] w-[22rem] -translate-y-1/2 rounded-full opacity-40 blur-3xl mix-blend-screen"
+            className="pointer-events-none absolute inset-x-0 top-1/2 mx-auto h-[22rem] w-[22rem] -translate-y-1/2 rounded-full opacity-60 blur-3xl mix-blend-multiply dark:opacity-40 dark:mix-blend-screen"
             style={{ background: "var(--gradient-halo)" }}
           />
           <div className="relative">

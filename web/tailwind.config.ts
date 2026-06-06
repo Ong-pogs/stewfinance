@@ -1,13 +1,17 @@
 import type { Config } from "tailwindcss";
 
 /**
- * Wired to the Linen Pearl Dark CSS vars in app/globals.css.
+ * Wired to the Linen Pearl CSS vars in app/globals.css (light `:root` + `.dark`).
  * Mirrors the landing's `@theme inline { --color-x: var(--x) }` mapping
  * (stewfinance-landing/app/globals.css lines 80-106) — in Tailwind v3 the
  * equivalent is referencing the raw `var(--x)` (vars already hold full
  * `oklch(...)` values, so no `oklch(var(--x))` channel wrapping is needed).
  */
 const config: Config = {
+  // next-themes (attribute="class") toggles `.dark` on <html>; opt into
+  // class-based dark variants so `dark:` utilities (e.g. the hero halo blend)
+  // follow the chosen theme instead of the OS `prefers-color-scheme`.
+  darkMode: "class",
   content: [
     "./pages/**/*.{js,ts,jsx,tsx,mdx}",
     "./components/**/*.{js,ts,jsx,tsx,mdx}",
