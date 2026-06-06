@@ -17,6 +17,8 @@ import { PotTicker } from "@/components/pot-ticker";
 import { Leaderboard } from "@/components/leaderboard";
 import { Badges } from "@/components/badges";
 import { SecondaryTabs } from "@/components/secondary-tabs";
+import { ActivityFeed } from "@/components/activity-feed";
+import { YourActivity } from "@/components/your-activity";
 import { PotHeroSkeleton, PositionSkeleton, ThisWeekSkeleton } from "@/components/skeletons";
 import { LoadError } from "@/components/empty-state";
 import type { PositionRow } from "@/components/leaderboard";
@@ -288,6 +290,18 @@ export default function AppPage() {
                 />
               )}
               {amount && <WithdrawCard onDone={refresh} />}
+
+              {/* Your personal activity — wins, current entry, your deposits.
+                  Real on-chain wins/position + your own tracked deposits only;
+                  no invented round-participation history. */}
+              <YourActivity
+                walletPubkey={wallet.publicKey ?? null}
+                amount={amount}
+                firstDepositTs={firstTs}
+                sumAmount={sumAmount}
+                sumAmountFirstTs={sumAmtFirstTs}
+                draws={draws}
+              />
             </div>
 
             {/* RIGHT — draw slot (consolidated in a later task) */}
@@ -387,6 +401,7 @@ export default function AppPage() {
               />
             }
             history={<DrawHistory draws={draws} />}
+            activity={<ActivityFeed draws={draws} />}
           />
         </div>
       )}

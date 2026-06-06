@@ -1,27 +1,30 @@
 "use client";
 import { useState, type ReactNode } from "react";
 
-type TabKey = "leaderboard" | "badges" | "history";
+type TabKey = "leaderboard" | "badges" | "history" | "activity";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "leaderboard", label: "Leaderboard" },
   { key: "badges", label: "Badges" },
   { key: "history", label: "History" },
+  { key: "activity", label: "Activity" },
 ];
 
 /**
- * SecondaryTabs — hosts the three secondary panels (Leaderboard / Badges /
- * History) and renders ONE at a time. Pure presentation: it takes the already
+ * SecondaryTabs — hosts the secondary panels (Leaderboard / Badges / History /
+ * Activity) and renders ONE at a time. Pure presentation: it takes the already
  * rendered panels as props and toggles which is visible via local state.
  */
 export function SecondaryTabs({
   leaderboard,
   badges,
   history,
+  activity,
 }: {
   leaderboard: ReactNode;
   badges: ReactNode;
   history: ReactNode;
+  activity: ReactNode;
 }) {
   const [active, setActive] = useState<TabKey>("leaderboard");
 
@@ -29,6 +32,7 @@ export function SecondaryTabs({
     leaderboard,
     badges,
     history,
+    activity,
   };
 
   return (
