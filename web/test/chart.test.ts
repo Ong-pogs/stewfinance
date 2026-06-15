@@ -42,6 +42,13 @@ describe("barHeight", () => {
     expect(barHeight(new BN(200), new BN(100), MAX_PX)).toBe(MAX_PX);
   });
 
+  it("never exceeds maxPx even when maxPx < minPx (clamp wins over the floor)", () => {
+    // A tiny-but-real value would normally floor to minPx (2), but with a
+    // maxPx of 1 the [0,maxPx] contract must still hold → result is 1, not 2.
+    const h = barHeight(new BN(1), new BN(1_000_000), 1, 2);
+    expect(h).toBe(1);
+  });
+
   it("handles the round-0 case: prize + its 20% pot feed share one scale", () => {
     // Round-0 prize ~20 USDC, pot feed = 20% = 4 USDC (base-units, 6 dp).
     const prize = new BN(20_000_000);

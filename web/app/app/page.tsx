@@ -69,8 +69,14 @@ export default function AppPage() {
     }
   }, []);
 
-  const refresh = useCallback(async () => {
+  // `isStale` lets the driving effect cancel an in-flight refresh: if the
+  // wallet/account switched (or the effect re-ran) while slow reads were
+  // pending, we drop the stale results instead of overwriting the NEW wallet's
+  // state. We also snapshot the wallet key at the start and re-check it before
+  // applying any setters, mirroring the teaser effect's cancellation pattern.
+  const refresh = useCallback(async (isStale: () => boolean = () => false) => {
     if (!wallet.publicKey) { setAmount(null); setIsLoading(false); return; }
+    const pk = wallet.publicKey.toBase58();
     // Show the skeleton only on the first load; later refreshes (post-action)
     // update in place so the screen never blanks out.
     if (!hasLoadedRef.current) setIsLoading(true);
@@ -86,9 +92,15 @@ export default function AppPage() {
         listDraws(prog),
         readAllPositions(prog),
       ]);
+      // Bail if this refresh is stale (effect cancelled) or the connected wallet
+      // changed under us — don't clobber the current wallet's state.
+      if (isStale() || wallet.publicKey?.toBase58() !== pk) return;
       setAmount(pos ? (pos.amount as BN) : null);
       setFirstTs(pos ? (pos.firstDepositTs as BN) : null);
       setWithdrawRequestedAt(pos ? (pos.withdrawRequestedAt as BN) : null);
+      // No position (e.g. after a full withdrawal) → clear the post-deposit
+      // nudge so the ShareCard can't linger beside a re-mounted DepositCard.
+      if (!pos) setJustDeposited(false);
       setPoolTotal(poolData ? (poolData.totalPrincipal as BN) : null);
       setSumAmount(poolData ? (poolData.sumAmount as BN) : null);
       setSumAmtFirstTs(poolData ? (poolData.sumAmountFirstTs as BN) : null);
@@ -99,13 +111,27 @@ export default function AppPage() {
       setPool(poolData);
       hasLoadedRef.current = true;
     } catch {
+      if (isStale() || wallet.publicKey?.toBase58() !== pk) return;
       setLoadError(true);
     } finally {
+      if (isStale() || wallet.publicKey?.toBase58() !== pk) return;
       setIsLoading(false);
     }
   }, [connection, wallet]);
 
-  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    let cancelled = false;
+    refresh(() => cancelled);
+    return () => { cancelled = true; };
+  }, [refresh]);
+
+  // Auto-expire the post-deposit nudge so the pre-deposit ShareCard is only a
+  // brief nudge — never a session-long sticky element.
+  useEffect(() => {
+    if (!justDeposited) return;
+    const id = setTimeout(() => setJustDeposited(false), 20000);
+    return () => clearTimeout(id);
+  }, [justDeposited]);
 
   // Disconnected teaser — read the live pot with a read-only provider (account
   // fetches need no signer). Cheap single read; falls back to a static teaser.

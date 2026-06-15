@@ -505,6 +505,26 @@ describe("poolMemberSubset", () => {
     expect(members).toEqual(positions);
   });
 
+  it("unique subset — returns exactly the one matching subset", () => {
+    // Only {50, 10} sums to 60; no other distinct subset of {50,10,150} does.
+    const positions = [pos(50), pos(10), pos(150)];
+    const members = poolMemberSubset(positions, usdc(60));
+    expect(members).toHaveLength(2);
+    const sum = members.reduce((acc, p) => acc.add(p.amount), new BN(0));
+    expect(sum.toString()).toBe(usdc(60).toString());
+    expect(members.some((p) => p.amount.eq(usdc(150)))).toBe(false);
+  });
+
+  it("ambiguous collision — 2+ subsets match → graceful fallback to ALL", () => {
+    // Colliding amounts: both {50a} and {50b} sum to 50. Two distinct subsets
+    // match the target, so picking either could drop a real member / keep a
+    // stray — we fall back to returning every position unchanged.
+    const positions = [pos(50), pos(50), pos(10)];
+    const members = poolMemberSubset(positions, usdc(50));
+    expect(members).toHaveLength(3);
+    expect(members).toEqual(positions); // unchanged — no guess made
+  });
+
   it("empty input returns an empty array", () => {
     expect(poolMemberSubset([], usdc(80))).toHaveLength(0);
   });

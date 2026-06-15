@@ -210,7 +210,14 @@ export type PositionLike = {
  *
  * Graceful fallback — returns ALL positions unchanged when:
  *   - N exceeds the cap (CAP, default 22), or
- *   - no exact subset sums to totalPrincipal.
+ *   - no exact subset sums to totalPrincipal, or
+ *   - the subset-sum is AMBIGUOUS (2+ distinct subsets sum to the target).
+ *
+ * Ambiguity matters: with colliding `amount` values multiple distinct subsets
+ * can sum to `totalPrincipal`, and returning the first one found can drop real
+ * members / keep strays. Since the only callers are DISPLAY-only (leaderboard,
+ * member-count stats), we degrade gracefully rather than guess: a unique match
+ * is trusted, anything else falls back to returning all positions.
  *
  * Pure function. Returns a new array (never mutates the input).
  */
@@ -232,23 +239,34 @@ export function poolMemberSubset<T extends { amount: BN }>(
   // Too many to brute-force → graceful fallback (return all unchanged).
   if (n > cap) return [...positions];
 
-  // Search non-empty subsets. (A target of 0 with a non-empty pool would only
-  // match the empty subset, so we leave it to the fallback below.)
+  // Scan ALL non-empty subsets and collect the distinct masks that match. A
+  // target of 0 with a non-empty pool would only match the empty subset, so we
+  // leave it to the fallback below.
+  let matchMask = -1;
+  let matchCount = 0;
   for (let mask = 1; mask < 1 << n; mask++) {
     let sum = new BN(0);
     for (let i = 0; i < n; i++) {
       if (mask & (1 << i)) sum = sum.add(positions[i].amount);
     }
     if (sum.eq(totalPrincipal)) {
-      const subset: T[] = [];
-      for (let i = 0; i < n; i++) {
-        if (mask & (1 << i)) subset.push(positions[i]);
-      }
-      return subset;
+      matchMask = mask;
+      matchCount++;
+      // Two distinct subsets match → ambiguous; stop and fall back.
+      if (matchCount > 1) break;
     }
   }
 
-  // No clean subset found → graceful fallback (return all unchanged).
+  // Exactly one distinct subset matches → trust it.
+  if (matchCount === 1) {
+    const subset: T[] = [];
+    for (let i = 0; i < n; i++) {
+      if (matchMask & (1 << i)) subset.push(positions[i]);
+    }
+    return subset;
+  }
+
+  // 0 matches (no clean subset) OR 2+ matches (ambiguous) → graceful fallback.
   return [...positions];
 }
 

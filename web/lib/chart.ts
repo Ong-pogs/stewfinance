@@ -36,8 +36,11 @@ export function barHeight(
   // ratio = value / max in [0,1], computed with 1e6 precision via BN.
   const scaled = value.muln(1_000_000).div(max).toNumber() / 1_000_000;
   const px = scaled * maxPx;
-  const clamped = Math.max(0, Math.min(maxPx, px));
-  return clamped < minPx ? minPx : clamped;
+  // Floor to minPx FIRST so a tiny-but-real bar stays visible, then clamp to
+  // [0, maxPx] LAST so the documented upper bound always holds (even when
+  // maxPx < minPx, where flooring-after-clamping would overshoot maxPx).
+  const floored = px < minPx ? minPx : px;
+  return Math.max(0, Math.min(maxPx, floored));
 }
 
 /**

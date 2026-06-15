@@ -36,8 +36,26 @@ export function DepositCard({ onDone }: { onDone: () => void }) {
   }, [connection, wallet.publicKey]);
 
   useEffect(() => {
-    refreshBalance();
-  }, [refreshBalance]);
+    let cancelled = false;
+    // Guard against an account switch: if the wallet changes while this read is
+    // in flight, drop the stale result instead of showing the prior wallet's
+    // USDC balance (and wrongly enabling Max). Mirrors the sibling fetch effects.
+    (async () => {
+      if (!wallet.publicKey) {
+        if (!cancelled) setBalance(null);
+        return;
+      }
+      try {
+        const ata = getAssociatedTokenAddressSync(USDC_MINT, wallet.publicKey);
+        const res = await connection.getTokenAccountBalance(ata);
+        if (!cancelled) setBalance(res.value.uiAmount ?? 0);
+      } catch {
+        // Most common cause: the ATA doesn't exist yet (never received USDC).
+        if (!cancelled) setBalance(0);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [connection, wallet.publicKey]);
 
   const canMax = balance !== null && balance >= MIN_DEPOSIT_UI;
   function setMax() {
