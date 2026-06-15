@@ -1,6 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { supabaseAdmin } from "@/lib/supabase";
+import { parseEventLine } from "@/lib/events";
 
 export const dynamic = "force-dynamic";
 
@@ -28,10 +29,11 @@ async function countsFromLocal() {
   try {
     const raw = await fs.readFile(path.join(process.cwd(), ".demo-events.local.jsonl"), "utf8");
     for (const line of raw.split("\n")) {
-      if (!line.trim()) continue;
-      const row = JSON.parse(line);
-      if (row.event in out) out[row.event]++;
-      if (row.event === "deposit_confirmed" && row.wallet) wallets.add(row.wallet);
+      const row = parseEventLine(line);
+      if (!row) continue;
+      const event = row.event as string;
+      if (event in out) out[event]++;
+      if (event === "deposit_confirmed" && row.wallet) wallets.add(row.wallet as string);
     }
   } catch {}
   return { out, uniqueDepositors: wallets.size };

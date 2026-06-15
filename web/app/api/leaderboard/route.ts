@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import path from "path";
 import { supabaseAdmin } from "@/lib/supabase";
+import { parseEventLine, readRef } from "@/lib/events";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +20,7 @@ async function fromSupabase(): Promise<LeaderboardEntry[]> {
 
   const map = new Map<string, Set<string>>();
   for (const row of data ?? []) {
-    const ref: string | undefined = (row.props as Record<string, string>)?.ref;
+    const ref = readRef(row as { props?: unknown });
     if (!ref || !row.wallet) continue;
     if (!map.has(ref)) map.set(ref, new Set());
     map.get(ref)!.add(row.wallet as string);
@@ -38,10 +39,10 @@ async function fromLocal(): Promise<LeaderboardEntry[]> {
       "utf8",
     );
     for (const line of raw.split("\n")) {
-      if (!line.trim()) continue;
-      const row = JSON.parse(line);
+      const row = parseEventLine(line);
+      if (!row) continue;
       if (row.event !== "referral_deposit") continue;
-      const ref: string | undefined = row.props?.ref;
+      const ref = readRef(row);
       if (!ref || !row.wallet) continue;
       if (!map.has(ref)) map.set(ref, new Set());
       map.get(ref)!.add(row.wallet as string);

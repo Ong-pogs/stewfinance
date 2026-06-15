@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import path from "path";
 import { supabaseAdmin } from "@/lib/supabase";
+import { parseEventLine } from "@/lib/events";
 
 export const dynamic = "force-dynamic";
 
@@ -65,9 +66,9 @@ async function fromLocal(): Promise<ActivityEvent[]> {
       "utf8",
     );
     for (const line of raw.split("\n")) {
-      if (!line.trim()) continue;
-      const row = JSON.parse(line);
-      if (!ACTIVITY_EVENTS.has(row.event)) continue;
+      const row = parseEventLine(line);
+      if (!row) continue;
+      if (!ACTIVITY_EVENTS.has(row.event as string)) continue;
       rows.push({
         event: row.event as string,
         wallet: (row.wallet as string | null) ?? null,
