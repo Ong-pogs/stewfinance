@@ -60,21 +60,39 @@ const drawPda = (round: number | bigint) =>
 const loadIdl = () =>
   JSON.parse(fs.readFileSync(path.join(__dirname, "..", "target", "idl", "stewfi.json"), "utf-8"));
 
-/** Recover THIS pool's member set: the subset whose weights sum to total_weight. */
-function selectPoolSubset(all: PositionEntry[], drawTs: bigint, totalWeight: bigint): PositionEntry[] {
+/**
+ * Recover THIS pool's member set: the subset whose weights sum to total_weight.
+ *
+ * The on-chain settle only checks Σweight == total_weight (a SUM), so two
+ * distinct subsets that happen to share that sum (e.g. positions with equal
+ * amount + equal first_deposit_ts → equal weight) are BOTH accepted on-chain —
+ * but only one is the real pool. Returning the wrong subset would pay a foreign
+ * winner. So we scan the WHOLE space: if a second distinct subset also matches,
+ * the membership is ambiguous and we refuse to guess.
+ */
+export function selectPoolSubset(all: PositionEntry[], drawTs: bigint, totalWeight: bigint): PositionEntry[] {
   const wt = all.map((p) => {
     const held = drawTs - p.firstDepositTs;
     return { p, w: held > 0n ? p.amount * held : 0n };
   });
   const n = wt.length;
   if (n > 22) throw new Error(`too many positions (${n}) for subset search`);
+  let match: PositionEntry[] | null = null;
   for (let mask = 1; mask < 1 << n; mask++) {
     let sum = 0n;
     const subset: PositionEntry[] = [];
     for (let i = 0; i < n; i++) if (mask & (1 << i)) { sum += wt[i].w; subset.push(wt[i].p); }
-    if (sum === totalWeight) return subset;
+    if (sum === totalWeight) {
+      if (match !== null) {
+        throw new Error("ambiguous pool membership: multiple position subsets match total_weight — cannot safely reconstruct; use a fresh single-pool deployment");
+      }
+      match = subset;
+    }
   }
-  throw new Error(`no subset of ${n} positions sums to total_weight ${totalWeight}`);
+  if (match === null) {
+    throw new Error(`no subset of ${n} positions sums to total_weight ${totalWeight}`);
+  }
+  return match;
 }
 
 async function sendV0(conn: anchor.web3.Connection, ixs: TransactionInstruction[], payer: Keypair, label: string): Promise<string> {
@@ -181,4 +199,8 @@ async function main() {
   console.log("\n✓ LIVE SWITCHBOARD VRF DRAW SUCCEEDED ON DEVNET");
 }
 
-main().then(() => process.exit(0)).catch((e) => { console.error("\nDRAW FAILED:\n", e); process.exit(1); });
+// Run only when invoked directly (not when imported for testing, e.g. the
+// selectPoolSubset unit test) — matches the require.main guard in run.ts.
+if (require.main === module) {
+  main().then(() => process.exit(0)).catch((e) => { console.error("\nDRAW FAILED:\n", e); process.exit(1); });
+}

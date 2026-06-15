@@ -60,6 +60,7 @@ import {
   cancelIfStuck,
   runDrawCycle,
   planSettle,
+  getClockSysvarUnixTs,
   USDC_MINT,
   DRAW_TIMEOUT_SECS,
   DRAW_INTERVAL_SECS,
@@ -206,13 +207,23 @@ async function decideAction(
   }
 
   if (snap.drawInProgress) {
-    // Watchdog: timeout-cancel if past committed_ts + DRAW_TIMEOUT.
+    // Watchdog: timeout-cancel if past committed_ts + DRAW_TIMEOUT. Use the
+    // Clock sysvar's unix_timestamp — on-chain `cancel_draw` gates on
+    // `Clock::get().unix_timestamp`, which `getBlockTime(getSlot())` can lag /
+    // disagree with. Fall back to block time / Date.now() only if the sysvar
+    // read itself fails.
     const draw = snap.currentDraw;
     if (draw) {
-      const nowBt = await program.provider.connection.getBlockTime(
-        await program.provider.connection.getSlot()
-      );
-      const now = BigInt(nowBt ?? Math.floor(Date.now() / 1000));
+      let nowSecs: number;
+      try {
+        nowSecs = await getClockSysvarUnixTs(program.provider.connection);
+      } catch {
+        const nowBt = await program.provider.connection.getBlockTime(
+          await program.provider.connection.getSlot()
+        );
+        nowSecs = nowBt ?? Math.floor(Date.now() / 1000);
+      }
+      const now = BigInt(nowSecs);
       if (now > draw.committedTs + BigInt(DRAW_TIMEOUT_SECS)) {
         return {
           kind: "cancel",

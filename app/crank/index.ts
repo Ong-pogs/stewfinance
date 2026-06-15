@@ -393,8 +393,11 @@ export interface CancelResult {
 /**
  * Watchdog. If a draw is in progress and `now > committed_ts + DRAW_TIMEOUT`,
  * sends cancel_draw (permissionless, timeout-gated on-chain). Otherwise a no-op.
- * `now` defaults to the chain's block time so the off-chain check matches the
- * on-chain gate; pass an explicit `nowSecs` to override (e.g. in tests).
+ * `now` defaults to the Clock sysvar's unix_timestamp so the off-chain check
+ * matches the on-chain gate EXACTLY — `cancel_draw` gates on
+ * `Clock::get().unix_timestamp`, which `getBlockTime(getSlot())` can lag /
+ * disagree with (especially on surfpool with a paused clock). Pass an explicit
+ * `nowSecs` to override (e.g. in tests).
  */
 export async function cancelIfStuck(
   program: Program<Stewfi>,
@@ -417,8 +420,13 @@ export async function cancelIfStuck(
 
   let now = nowSecs;
   if (now === undefined) {
-    const bt = await connection.getBlockTime(await connection.getSlot());
-    now = bt ?? Math.floor(Date.now() / 1000);
+    try {
+      now = await getClockSysvarUnixTs(connection);
+    } catch {
+      // Fall back only if the sysvar read itself fails.
+      const bt = await connection.getBlockTime(await connection.getSlot());
+      now = bt ?? Math.floor(Date.now() / 1000);
+    }
   }
 
   if (now <= committedTs + DRAW_TIMEOUT_SECS) {
@@ -1347,7 +1355,7 @@ async function getClockSysvarSlot(
   return Number(info.data.readBigUInt64LE(0));
 }
 
-async function getClockSysvarUnixTs(
+export async function getClockSysvarUnixTs(
   connection: import("@solana/web3.js").Connection
 ): Promise<number> {
   const info = await connection.getAccountInfo(CLOCK_SYSVAR);
