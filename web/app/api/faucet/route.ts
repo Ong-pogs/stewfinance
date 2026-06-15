@@ -64,8 +64,16 @@ export async function POST(req: NextRequest) {
       solSig = null;
     }
 
-    const ata = await createAssociatedTokenAccountIdempotent(conn, authority, mint, user);
-    const sig = await mintTo(conn, authority, mint, ata, authority, FAUCET_AMOUNT);
+    let sig: string;
+    try {
+      const ata = await createAssociatedTokenAccountIdempotent(conn, authority, mint, user);
+      sig = await mintTo(conn, authority, mint, ata, authority, FAUCET_AMOUNT);
+    } catch {
+      // Mint failed (RPC flakiness, authority out of SOL, confirm timeout) and the
+      // user got nothing — release the rate-limit slot so the call is retryable.
+      seen.delete(wallet);
+      return NextResponse.json({ ok: false, error: "faucet_failed" }, { status: 500 });
+    }
     seen.set(wallet, Date.now());
     return NextResponse.json({ ok: true, sig, solSig });
   } catch {
