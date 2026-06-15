@@ -1329,6 +1329,15 @@ pub mod stewfi {
             ctx.accounts.admin.key() == pool_config.admin,
             StewfiError::Unauthorized
         );
+        // Reject back-dated timestamps: a `ts` in the past would let the admin arm an
+        // instant re-trigger and bypass the weekly cadence the rest of the program
+        // enforces (audit BUG-8). `ts == now` is allowed so the first draw can open
+        // immediately.
+        let clock = Clock::get()?;
+        require!(
+            ts >= clock.unix_timestamp,
+            StewfiError::BackdatedTimestamp
+        );
         pool_config.next_draw_ts = ts;
         msg!("next_draw_ts set to {}", ts);
         Ok(())
@@ -1816,9 +1825,15 @@ pub mod stewfi {
         )?;
 
         // Principal now sits in growing_pot_vault (or was honestly reduced by a
-        // Kamino loss). Reset the tracker — the next compound re-establishes it.
+        // Kamino loss). Decrement the tracker by exactly what was returned,
+        // saturating at 0. On a FULL redeem `principal_return == pot_principal_usdc`
+        // so this still reaches 0 (next compound re-establishes it). On a PARTIAL
+        // redeem the remaining tracked principal stays intact — otherwise the
+        // orphaned pot cTokens would later be redeemed into usdc_vault and, with the
+        // tracker zeroed, paid out as PRIZE by trigger_draw (audit BUG-7).
         let pool_config = &mut ctx.accounts.pool_config;
-        pool_config.pot_principal_usdc = 0;
+        pool_config.pot_principal_usdc =
+            pool_config.pot_principal_usdc.saturating_sub(principal_return);
 
         // The yield_amount remains in usdc_vault → captured by the EXISTING
         // trigger_draw prize formula (pot funds are NOT in total_principal).
@@ -3072,4 +3087,6 @@ pub enum StewfiError {
     WrongPotObligation,
     #[msg("Pot redeem returned nothing — the pot has no position to harvest")]
     NoPotYield,
+    #[msg("next_draw_ts may not be back-dated before the current time")]
+    BackdatedTimestamp,
 }

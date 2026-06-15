@@ -15,11 +15,12 @@
  *     obligation; pot_principal_usdc increases by exactly the amount; the pot
  *     obligation holds cTokens.
  *   - harvest_growing_pot_yield fully redeems the pot position into usdc_vault,
- *     returns the recovered principal to growing_pot_vault, resets
- *     pot_principal_usdc to 0, and leaves only the yield in usdc_vault. We test
- *     the realistic FLAT-week case on a fork (a few slots of yield ≈ 0): the
- *     principal is preserved (growing_pot_vault ≈ original), and pot_principal is
- *     reset. We also test the EMPTY-pot guard (NoPotYield).
+ *     returns the recovered principal to growing_pot_vault, decrements
+ *     pot_principal_usdc by exactly the returned slice (a FULL redeem returns the
+ *     whole tracked principal, so it lands at 0), and leaves only the yield in
+ *     usdc_vault. We test the realistic FLAT-week case on a fork (a few slots of
+ *     yield ≈ 0): the principal is preserved (growing_pot_vault ≈ original), and
+ *     pot_principal lands at 0. We also test the EMPTY-pot guard (NoPotYield).
  *   - Permissionless: compound + harvest are callable by a NON-admin signer.
  *   - draw_in_progress guard: compound + harvest rejected while a draw is live.
  *
