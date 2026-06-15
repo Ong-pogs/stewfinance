@@ -182,7 +182,15 @@ export async function readPoolState(
         prizePool: BigInt(d.prizePool.toString()),
         winner: d.winner as PublicKey,
       };
-    } catch {
+    } catch (err) {
+      // The Draw fetch failed (transient RPC error, or the account isn't
+      // readable yet) while draw_in_progress is set. Surface it so the null
+      // isn't silent — decideAction routes drawInProgress && !currentDraw to
+      // cancelIfStuck (timeout-gated on-chain), rather than skipping blindly.
+      console.warn(
+        `[crank] readPoolState: Draw fetch failed for round ${cfg.currentRound.toString()} ` +
+          `(draw_in_progress=true) — currentDraw=null: ${String(err)}`
+      );
       currentDraw = null;
     }
   }

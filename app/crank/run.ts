@@ -230,6 +230,17 @@ async function decideAction(
           reason: `draw stuck past timeout (committed_ts=${draw.committedTs}, now=${now}, timeout=${DRAW_TIMEOUT_SECS}s)`,
         };
       }
+    } else {
+      // draw_in_progress is set but the Draw account couldn't be fetched
+      // (transient RPC error — readPoolState already logged a warning). Don't
+      // silently skip a possibly-stuck draw: route to cancelIfStuck, which
+      // re-fetches the Draw itself and is on-chain timeout-gated (cancel_draw
+      // requires now > committed_ts + DRAW_TIMEOUT). It either cancels a
+      // genuinely-timed-out draw or surfaces a visible error — never a silent skip.
+      return {
+        kind: "cancel",
+        reason: "draw in progress but Draw fetch failed — routing to cancelIfStuck (timeout-gated on-chain)",
+      };
     }
     return { kind: "skip", reason: "draw in progress (within timeout window)" };
   }

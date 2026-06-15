@@ -53,6 +53,26 @@ describe("selectPoolSubset — pool membership reconstruction (Bug 5)", () => {
     expect(out.length).to.equal(2);
   });
 
+  it("includes a zero-weight member without throwing ambiguity (Bug 7)", () => {
+    // Legitimate single-pool deployment where one position has ZERO weight:
+    // a deposit confirming in the same unix second as trigger_draw's commit →
+    // first_deposit_ts == draw_ts → held = 0 → weight = 0. With the old code,
+    // {with it} and {without it} BOTH sum to total_weight → 2 matches → false
+    // ambiguity throw, bricking a settleable round. The fix runs the subset-sum
+    // + ambiguity check over only the positive-weight set, then appends all
+    // zero-weight positions unconditionally (they add 0 to running_weight).
+    const p0 = pos(10n, 900n); // w = 1000 (positive)
+    const p1 = pos(20n, 800n); // w = 4000 (positive)
+    const pz = pos(50n, DRAW_TS); // w = 0 (deposit at the draw second)
+    const out = selectPoolSubset([p0, p1, pz], DRAW_TS, 5000n);
+    // All three members are returned, no throw.
+    const owners = new Set(out.map((p) => p.pubkey.toBase58()));
+    expect(owners.has(p0.pubkey.toBase58())).to.equal(true);
+    expect(owners.has(p1.pubkey.toBase58())).to.equal(true);
+    expect(owners.has(pz.pubkey.toBase58())).to.equal(true);
+    expect(out.length).to.equal(3);
+  });
+
   it("THROWS when two distinct subsets share the same total_weight (ambiguous)", () => {
     // Four equal-weight positions: amount=10, firstDepositTs=900 → each w=1000.
     // total_weight = 2000 is satisfied by {p0,p1}, {p0,p2}, {p1,p3}, ... — many

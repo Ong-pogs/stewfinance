@@ -69,19 +69,31 @@ const loadIdl = () =>
  * but only one is the real pool. Returning the wrong subset would pay a foreign
  * winner. So we scan the WHOLE space: if a second distinct subset also matches,
  * the membership is ambiguous and we refuse to guess.
+ *
+ * Zero-weight positions (weight == 0, e.g. first_deposit_ts == draw_ts when a
+ * deposit confirms in the same unix second as trigger_draw's commit) are
+ * excluded from the subset-sum search and the ambiguity check: they add 0 to
+ * any subset's sum, so {with them} and {without them} BOTH match total_weight
+ * and would falsely trip the ambiguity throw on a legitimate single-pool
+ * deployment. Since they contribute 0 to running_weight, on-chain completeness
+ * is unaffected by including them — so we run the search/ambiguity-throw over
+ * only the positive-weight set, then unconditionally append all zero-weight
+ * positions to the returned member set (they're free to include).
  */
 export function selectPoolSubset(all: PositionEntry[], drawTs: bigint, totalWeight: bigint): PositionEntry[] {
   const wt = all.map((p) => {
     const held = drawTs - p.firstDepositTs;
     return { p, w: held > 0n ? p.amount * held : 0n };
   });
-  const n = wt.length;
+  const positive = wt.filter((e) => e.w > 0n);
+  const zero = wt.filter((e) => e.w === 0n).map((e) => e.p);
+  const n = positive.length;
   if (n > 22) throw new Error(`too many positions (${n}) for subset search`);
   let match: PositionEntry[] | null = null;
   for (let mask = 1; mask < 1 << n; mask++) {
     let sum = 0n;
     const subset: PositionEntry[] = [];
-    for (let i = 0; i < n; i++) if (mask & (1 << i)) { sum += wt[i].w; subset.push(wt[i].p); }
+    for (let i = 0; i < n; i++) if (mask & (1 << i)) { sum += positive[i].w; subset.push(positive[i].p); }
     if (sum === totalWeight) {
       if (match !== null) {
         throw new Error("ambiguous pool membership: multiple position subsets match total_weight — cannot safely reconstruct; use a fresh single-pool deployment");
@@ -92,7 +104,9 @@ export function selectPoolSubset(all: PositionEntry[], drawTs: bigint, totalWeig
   if (match === null) {
     throw new Error(`no subset of ${n} positions sums to total_weight ${totalWeight}`);
   }
-  return match;
+  // Zero-weight positions add 0 to running_weight, so on-chain completeness is
+  // unaffected — append them all to the reconstructed member set.
+  return match.concat(zero);
 }
 
 async function sendV0(conn: anchor.web3.Connection, ixs: TransactionInstruction[], payer: Keypair, label: string): Promise<string> {
