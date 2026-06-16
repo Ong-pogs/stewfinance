@@ -3026,6 +3026,11 @@ export type Stewfi = {
       "code": 6036,
       "name": "noPotYield",
       "msg": "Pot redeem returned nothing — the pot has no position to harvest"
+    },
+    {
+      "code": 6037,
+      "name": "backdatedTimestamp",
+      "msg": "next_draw_ts may not be back-dated before the current time"
     }
   ],
   "types": [
