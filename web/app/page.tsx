@@ -6,6 +6,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { Faq } from "@/components/faq";
 import { HowItWorksInteractive } from "@/components/how-it-works-interactive";
 import { WinnerCarousel } from "@/components/winner-carousel";
+import { SiteFooter } from "@/components/site-footer";
 
 const STEPS = [
   {
@@ -135,6 +136,11 @@ export default function Home() {
 
       {/* FAQ — honest Q&A, native details/summary, on-theme. */}
       <Faq />
+
+      {/* Shared site footer — matches the FAQ's width container. */}
+      <div className="mx-auto max-w-3xl px-6 pb-12">
+        <SiteFooter />
+      </div>
     </main>
   );
 }

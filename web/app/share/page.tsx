@@ -108,6 +108,12 @@ export default function SharePage({ searchParams }: { searchParams: SP }) {
   const { title, sub } = headline(searchParams);
   const ref = first(searchParams.ref);
   const appHref = ref ? `/app?ref=${encodeURIComponent(ref)}` : "/app";
+  // Win shares with a round get a direct link to that draw's fairness proof.
+  const round = first(searchParams.round);
+  const proofHref =
+    normKind(first(searchParams.kind)) === "win" && round && /^\d+$/.test(round)
+      ? `/draw/${round}`
+      : null;
 
   return (
     <main className="flex min-h-[80vh] flex-col items-center justify-center px-6 text-center">
@@ -124,6 +130,14 @@ export default function SharePage({ searchParams }: { searchParams: SP }) {
       >
         Open the app
       </Link>
+      {proofHref && (
+        <Link
+          href={proofHref}
+          className="mt-4 rounded text-sm text-primary underline decoration-border underline-offset-2 hover:text-accent-warm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+        >
+          See the proof for round {round}
+        </Link>
+      )}
       <p className="mt-6 max-w-md text-xs text-muted-foreground">
         StewFi is a savings account where the interest is the prize. Devnet demo
         on Solana.

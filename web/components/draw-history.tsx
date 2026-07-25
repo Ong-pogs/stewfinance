@@ -57,7 +57,15 @@ export function DrawHistory({ draws }: { draws: DrawSummary[] }) {
         <tbody>
           {draws.map((d) => (
             <tr key={d.round} className="border-b border-border last:border-0">
-              <td className="py-2 pr-4 font-mono tabular-nums text-foreground">{d.round}</td>
+              <td className="py-2 pr-4 font-mono tabular-nums">
+                <Link
+                  href={`/draw/${d.round}`}
+                  aria-label={`Proof for round ${d.round}`}
+                  className="rounded text-foreground underline decoration-border underline-offset-2 hover:text-accent-warm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card"
+                >
+                  {d.round}
+                </Link>
+              </td>
               <td className="py-2 pr-4 font-mono tabular-nums text-foreground">
                 {d.status === "settled" || d.status === "claimed"
                   ? fmtUsdc(d.prizePool)

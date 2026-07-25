@@ -21,6 +21,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import Link from "next/link";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { EmptyState, LoadError } from "@/components/empty-state";
+import { SiteFooter } from "@/components/site-footer";
 import { STEWFI_IDL, Stewfi } from "@/lib/idl";
 import { readPool, listDraws, readAllPositions } from "@/lib/stewfi";
 import { poolMemberSubset } from "@/lib/gamify";
@@ -191,6 +192,9 @@ export default function StatsPage() {
           guarantee.
         </p>
       </footer>
+
+      {/* Shared site footer */}
+      <SiteFooter />
     </main>
   );
 }

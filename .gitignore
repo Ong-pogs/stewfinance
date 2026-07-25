@@ -34,3 +34,6 @@ web/.demo-events.local.jsonl
 # surfpool local workspace + logs
 .surfpool/
 .superstack/surf/
+
+# Obsidian workspace config — local-only
+.obsidian/

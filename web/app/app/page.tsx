@@ -22,6 +22,7 @@ import { ActivityFeed } from "@/components/activity-feed";
 import { YourActivity } from "@/components/your-activity";
 import { PotHeroSkeleton, PositionSkeleton, ThisWeekSkeleton } from "@/components/skeletons";
 import { LoadError } from "@/components/empty-state";
+import { SiteFooter } from "@/components/site-footer";
 import type { PositionRow } from "@/components/leaderboard";
 import { getProgram, readPosition, readPool, readCurrentDraw, listDraws, readAllPositions, DrawSummary } from "@/lib/stewfi";
 import { fmtUsdc } from "@/lib/format";
@@ -438,6 +439,10 @@ export default function AppPage() {
           />
         </div>
       )}
+
+      {/* Shared site footer — also surfaces Pool stats on mobile, where the
+          top-bar link is hidden below sm. */}
+      <SiteFooter />
     </main>
   );
 }
